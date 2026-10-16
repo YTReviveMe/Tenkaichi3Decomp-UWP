@@ -23,4 +23,8 @@
 #define fabsf Port_fabsf
 #define scalbnf Port_scalbnf
 #define copysignf Port_copysignf
+#ifdef BT3_UWP
+/* The Windows CRT declares logbf differently from this old fdlibm header. */
+#define logbf BT3_newlib_logbf
+#endif
 #endif

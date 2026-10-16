@@ -9,7 +9,12 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
+#ifdef BT3_UWP
+#include "../../uwp/audio.h"
+#endif
+#ifndef BT3_UWP
 #include "imgui_impl_opengl3.h"
+#endif
 #include "ui.h"
 #include "namefont.h"
 #include "../port_release.h"
@@ -87,6 +92,11 @@ void Port_LobbyLaunch(void);
 }
 static bool sReady, sOpen;
 static bool sNet;                              // the open window is the online screen (Dragon Net Battle), not the settings
+#ifdef BT3_UWP
+static SDL_Window *sUiWindow;
+static bool sNetTextActive, sNetTextFinishQueued;
+static bool sNetKeyboardWasVisible;
+#endif
 static int sForceTab = -1;                     // BT3_UI_OPEN=<tab>: open at start on that tab (testing)
 static int sCapKind, sCapPlayer, sCapAction;   // waiting for a key (1) or a controller button (2) to bind
 static Uint64 sCapUntil;                       // ... until then: a controller has no button that is not a binding, so the wait ends by itself
@@ -147,11 +157,13 @@ static SDL_GPUTexture *make_strip(uint8_t *pix, size_t bytes, uint32_t w, uint32
     SDL_GPUTexture *tex;
     void *map;
 
+#ifndef BT3_UWP
     if (sGL) { // the OpenGL back end: a GL texture, its name carried in the pointer (ImGui's OpenGL3 backend takes it so)
         unsigned id = GsGl_StripTexture(pix, (int)w, (int)(h * count));
         free(pix);
         return (SDL_GPUTexture *)(intptr_t)id;
     }
+#endif
     SDL_zero(ci);
     ci.type = SDL_GPU_TEXTURETYPE_2D;
     ci.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -362,6 +374,10 @@ int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const c
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
+#ifdef BT3_UWP
+    sUiWindow = window;
+    SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
+#endif
     io.IniFilename = NULL; // no window-layout file next to the game
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad; // (a controller opens it too: START + SELECT)
     style();
@@ -374,10 +390,14 @@ int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const c
         }
     }
     if (device == NULL) { // the OpenGL back end (gs_gl.c), with its context current
+#ifdef BT3_UWP
+        return 0;
+#else
         sGL = 1;
         if (!ImGui_ImplSDL3_InitForOpenGL(window, (SDL_GLContext)gl_context) || !ImGui_ImplOpenGL3_Init("#version 330 core")) {
             return 0;
         }
+#endif
     } else {
         if (!ImGui_ImplSDL3_InitForSDLGPU(window)) {
             return 0;
@@ -421,6 +441,13 @@ static void input_owner(void) {
 }
 
 static void set_open(bool open) {
+#ifdef BT3_UWP
+    if (!open && sNet && sUiWindow != NULL && SDL_TextInputActive(sUiWindow)) {
+        SDL_StopTextInput(sUiWindow);
+    }
+    sNetTextActive = sNetTextFinishQueued = false;
+    sNetKeyboardWasVisible = false;
+#endif
     if (open && sChat) {
         chat_close();
     }
@@ -577,7 +604,11 @@ static void quick_status(int state, int &lastState, const char *name) {
         // The same for everyone in a quick match, whoever turns out to be the host: rollback of up to 8 frames and
         // the input delay measured from the connection. (The Host tab's own choices are for matches with someone
         // you can agree them with; a stranger's saved ones were not to be inherited unseen.)
+#ifdef BT3_UWP
+        Port_NetOptions(0, -2);
+#else
         Port_NetOptions(Port_RollCan() ? 8 : 0, -2);
+#endif
         Port_NetSpeedSet(Port_NetSpeedStandard()); // (every quick match: the competitive standard)
         Port_NetRulesSet(sQueue == 0 ? 0 : sQueue == 1 ? 1 : 2, sQueue >= 2 ? sQueue - 2 : 0, 4);
         Port_NetNameSet(name);
@@ -589,6 +620,27 @@ static void quick_status(int state, int &lastState, const char *name) {
     }
 }
 
+#ifdef BT3_UWP
+// ImGui owns the field's text; SDL owns the Xbox keyboard. Selecting a field
+// explicitly starts text input so the UWP InputPane appears even with a gamepad.
+static void net_text_field(void) {
+    if (ImGui::IsItemActive()) {
+        sNetTextActive = true;
+    }
+    if (ImGui::IsItemActivated() && sUiWindow != NULL) {
+        SDL_StartTextInput(sUiWindow);
+    }
+}
+
+static void net_finish_text(void) {
+    if (sNetTextActive && !sNetTextFinishQueued) {
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+        sNetTextFinishQueued = true;
+        sPadHold = true;
+    }
+}
+#endif
+
 static void build_net(void) {
     static char name[17] = "Player", address[64] = "", port[8] = "7000";
     static int tab, roll = -1, delay = 1, battle = -1, timeLimit = 3, speed = -1;
@@ -597,6 +649,9 @@ static void build_net(void) {
     static int lastState = 0;         // what the lobby said last (for its messages after a failure)
     ImGuiIO &io = ImGui::GetIO();
     bool open = true;
+#ifdef BT3_UWP
+    sNetTextActive = false;
+#endif
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
@@ -608,17 +663,30 @@ static void build_net(void) {
             int min = 0, latest = 0, mine = Port_LobbyRelease(&min, &latest);
             if (min > mine) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.35f, 1.0f));
+#ifdef BT3_UWP
+                ImGui::TextWrapped("This matchmaking service requires a newer game release. Direct address play can still work.");
+#else
                 ImGui::TextWrapped("Update available. Online servers are unreachable until you update.");
+#endif
                 ImGui::PopStyleColor();
+#ifndef BT3_UWP
                 ImGui::TextDisabled("You have 0.%d.%d; 0.%d.%d or newer is needed. github.com/z3xox/Tenkaichi3Decomp/releases", mine / 100, mine % 100, min / 100, min % 100);
+#endif
                 ImGui::Separator();
+#ifndef BT3_UWP
             } else if (latest > mine) {
                 ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Update available: release 0.%d.%d.", latest / 100, latest % 100);
                 ImGui::TextDisabled("github.com/z3xox/Tenkaichi3Decomp/releases");
                 ImGui::Separator();
+#endif
             }
         }
+#ifdef BT3_UWP
+        ImGui::TextWrapped("Fight another player on Xbox or PC. Host with a room code, or join using their code.");
+        ImGui::TextDisabled("Press A on a text field for the Xbox keyboard. Press Start to close it.");
+#else
         ImGui::TextWrapped("Fight a player on another computer. One of you hosts, the other joins with the host's address.");
+#endif
         ImGui::Spacing();
         ImGui::SetNextItemWidth(260.0f);
         {
@@ -629,6 +697,9 @@ static void build_net(void) {
             }
         }
         ImGui::InputText("Player name", name, sizeof(name));
+#ifdef BT3_UWP
+        net_text_field();
+#endif
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             Port_SettingTextSave("net_name", name);
             Port_SettingsWrite();
@@ -645,9 +716,16 @@ static void build_net(void) {
                 ImGui::BeginDisabled(useCode);
                 ImGui::SetNextItemWidth(120.0f);
                 ImGui::InputText("Port", port, sizeof(port), ImGuiInputTextFlags_CharsDecimal);
+#ifdef BT3_UWP
+                net_text_field();
+#endif
                 ImGui::EndDisabled();
                 if (roll < 0) { // the choices of last time (new names: the first ones' defaults were 4 frames and delay 1)
+#ifdef BT3_UWP
+                    roll = Port_RollCan() ? Port_Setting("net_rollback2", 0) / 2 : 0;
+#else
                     roll = Port_RollCan() ? Port_Setting("net_rollback2", 8) / 2 : 0;
+#endif
                     delay = Port_Setting("net_delay2", -1) + 1; // 0 = automatic, else the delay + 1
                     if (roll < 0 || roll > 4) { roll = 4; }
                     if (delay < 0 || delay > 7) { delay = 0; }
@@ -750,6 +828,9 @@ static void build_net(void) {
                 tab = 1;
                 ImGui::SetNextItemWidth(120.0f);
                 ImGui::InputText("Room code", roomCode, sizeof(roomCode), ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank);
+#ifdef BT3_UWP
+                net_text_field();
+#endif
                 ImGui::SameLine();
                 if (ImGui::Button("Paste")) { // the letters and digits of what was copied, as capitals
                     char *clip = SDL_GetClipboardText();
@@ -766,8 +847,14 @@ static void build_net(void) {
                 ImGui::BeginDisabled(roomCode[0] != '\0');
                 ImGui::SetNextItemWidth(260.0f);
                 ImGui::InputText("Host's address", address, sizeof(address));
+#ifdef BT3_UWP
+                net_text_field();
+#endif
                 ImGui::SetNextItemWidth(120.0f);
                 ImGui::InputText("Port", port, sizeof(port), ImGuiInputTextFlags_CharsDecimal);
+#ifdef BT3_UWP
+                net_text_field();
+#endif
                 ImGui::EndDisabled();
                 ImGui::EndTabItem();
             }
@@ -880,6 +967,15 @@ static void build_net(void) {
         ImGui::TextDisabled("back to where you were. The host's controls also work the menus.");
     }
     ImGui::End();
+#ifdef BT3_UWP
+    if (sUiWindow != NULL && !sNetTextActive && SDL_TextInputActive(sUiWindow)) {
+        SDL_StopTextInput(sUiWindow);
+    }
+    if (sNetTextFinishQueued) {
+        io.AddKeyEvent(ImGuiKey_Enter, false);
+        sNetTextFinishQueued = false;
+    }
+#endif
     if (!open) {
         Port_LobbyCancel();
         set_open(false);
@@ -889,6 +985,7 @@ static void build_net(void) {
 void Ui_Toggle(void) {
     if (sReady && !sQuit) {
         set_open(!sOpen);
+        if (sOpen) sPadHold = true;
     }
 }
 
@@ -1010,6 +1107,30 @@ int Ui_Event(const SDL_Event *ev) {
     if (!sOpen) {
         return 0;
     }
+#ifdef BT3_UWP
+    if (sNet && ev->type == SDL_EVENT_SCREEN_KEYBOARD_SHOWN) {
+        sNetKeyboardWasVisible = true;
+        return 1;
+    }
+    if (sNet && ev->type == SDL_EVENT_SCREEN_KEYBOARD_HIDDEN) {
+        sNetKeyboardWasVisible = false;
+        sPadHold = true;
+        net_finish_text();
+        return 1;
+    }
+    if (sNet && sUiWindow != NULL && SDL_ScreenKeyboardShown(sUiWindow) &&
+        (ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP) &&
+        (ev->key.scancode == SDL_SCANCODE_RETURN || ev->key.scancode == SDL_SCANCODE_KP_ENTER ||
+         ev->key.scancode == SDL_SCANCODE_ESCAPE)) {
+        return 1;
+    }
+    if (sNet && sNetTextActive) {
+        if (ev->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && ev->gbutton.button == SDL_GAMEPAD_BUTTON_START) {
+            net_finish_text();
+            return 1;
+        }
+    }
+#endif
     if (sCapKind != 0) { // the next key or button is the binding; Esc leaves it as it was, Delete clears it
         bool done = false;
         if (ev->type == SDL_EVENT_KEY_DOWN) {
@@ -1074,13 +1195,22 @@ static void video_tab(PortVideo &v) {
 
     snprintf(label, sizeof(label), "%dx  (%d x %d)", v.scale, 512 * v.scale, 448 * v.scale);
     if (ImGui::BeginCombo("Internal resolution", label)) {
-        for (int n = 1; n <= 8; n++) {
+        for (int n = 1; n <=
+#ifdef BT3_UWP
+             4
+#else
+             8
+#endif
+             ; n++) {
             snprintf(label, sizeof(label), "%dx  (%d x %d)", n, 512 * n, 448 * n);
             if (ImGui::Selectable(label, n == v.scale)) { v.scale = n; }
         }
         ImGui::EndCombo();
     }
     ImGui::SetItemTooltip("How finely the game is drawn. 1x is the PlayStation 2's own resolution.\nHigher is sharper and uses more video memory.");
+#ifdef BT3_UWP
+    ImGui::TextDisabled("Xbox: 2x is the default. Higher resolutions need much more graphics memory.");
+#endif
     for (int i = 1; i < (int)(sizeof(aspects) / sizeof(aspects[0])); i++) {
         if (abs(aspects[i].milli - v.aspectMilli) < abs(aspects[best].milli - v.aspectMilli)) { best = i; }
     }
@@ -1099,10 +1229,12 @@ static void video_tab(PortVideo &v) {
     ImGui::SetItemTooltip("How the display of a fight, the menus and text are drawn above 1x internal resolution.\n"
                           "Sharp: each of the PlayStation 2's pixels is a block. Smooth: as an emulator shows them.\n"
                           "No difference at 1x.");
+#ifndef BT3_UWP
     bool full = v.fullscreen != 0;
     if (ImGui::Checkbox("Full screen", &full)) { v.fullscreen = full; }
     ImGui::SameLine();
     ImGui::TextDisabled("(F11)");
+#endif
     {
         bool vs = v.vsync != 0, fs = v.frameSkip != 0;
         if (ImGui::Checkbox("V-sync", &vs)) { v.vsync = vs; }
@@ -1122,6 +1254,7 @@ static void video_tab(PortVideo &v) {
                                   "cannot keep up it may stutter where the original order would not.");
         }
     }
+#ifndef BT3_UWP
     SDL_DisplayID *displays = SDL_GetDisplays(&count);
     if (v.display > count) { v.display = 0; }
     snprintf(label, sizeof(label), "%s", v.display == 0 ? "Chosen by the desktop" : SDL_GetDisplayName(displays[v.display - 1]));
@@ -1152,6 +1285,9 @@ static void video_tab(PortVideo &v) {
         }
         ImGui::TextWrapped("Active GPU: %s", sGpuName);
     }
+#else
+    ImGui::TextWrapped("Renderer: Direct3D 12  |  GPU: %s", sGpuName);
+#endif
     {
         // In-between pictures (gs_draw.c): the fight is computed 30 times a second, as on the console; with this
         // on one more picture is drawn between each two. The game itself, its replays and online play are the same.
@@ -1360,6 +1496,13 @@ static void ui_tab(PortVideo &v) {
 extern "C" int gPortMusicFollows; // snd_adx.c: 1 = looping music is sped up or slowed down with the game
 
 static void audio_tab(PortVideo &v) {
+#ifdef BT3_UWP
+    static const char *const states[] = {"Not started", "Opening playback device...", "Playback ready (WASAPI)", "Playback unavailable"};
+    int audio = PortUwp_AudioStatus();
+    ImGui::Text("Xbox audio: %s", states[audio >= 0 && audio <= 3 ? audio : 3]);
+    if (audio == 3 && ImGui::Button("Retry sound device")) PortUwp_AudioRetry();
+    ImGui::Separator();
+#endif
     ImGui::SliderInt("Music", &v.music, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SliderInt("Sound effects", &v.effects, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetItemTooltip("Hits, blasts, menu sounds. Takes effect with the next sound that starts.");
@@ -1747,7 +1890,7 @@ static void build(void) {
         }
         if ((io.BackendFlags & ImGuiBackendFlags_HasGamepad) != 0) {
             ImGui::SameLine();
-            ImGui::TextDisabled("D-pad: move   Cross / A: choose   Circle / B: back   L1 / R1: tab");
+            ImGui::TextDisabled("D-pad: move   A: choose   B: back   LB / RB: tab   Start + Select: close");
         }
     }
     ImGui::End();
@@ -1884,7 +2027,9 @@ static const FontName *font_name(int style, const char *text) {
     FontName &n = sFontNames[sFontNext++ % (sizeof(sFontNames) / sizeof(sFontNames[0]))];
     if (n.used && n.tex != NULL) {
         if (sGL) {
+#ifndef BT3_UWP
             GsGl_StripTextureFree((unsigned)(intptr_t)n.tex);
+#endif
         } else {
             SDL_ReleaseGPUTexture(sDevice, n.tex);
         }
@@ -2170,14 +2315,23 @@ static bool frame_build(void) {
     }
     // (the button that becomes the binding would also press the row it is bound in; while a chat line is typed the
     // controller is the game's)
-    if (sPadHold || (sChat && !sOpen)) {
+    // Keep keyboard controller presses out of ImGui navigation.
+    bool screenKeyboard = false;
+#ifdef BT3_UWP
+    screenKeyboard = sNet && sUiWindow != NULL && SDL_ScreenKeyboardShown(sUiWindow);
+    if (sNetKeyboardWasVisible && !screenKeyboard) net_finish_text();
+    sNetKeyboardWasVisible = screenKeyboard;
+#endif
+    if (sPadHold || screenKeyboard || (sChat && !sOpen)) {
         ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
     } else {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     }
     sBuilt = true;
     if (sGL) {
+#ifndef BT3_UWP
         ImGui_ImplOpenGL3_NewFrame();
+#endif
     } else {
         ImGui_ImplSDLGPU3_NewFrame();
     }
@@ -2324,7 +2478,9 @@ void Ui_Draw(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target) {
 
 // The OpenGL back end's turn: over the presented picture, just before the buffers are swapped.
 void Ui_DrawGL(void) {
+#ifndef BT3_UWP
     if (sGL && frame_build()) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
+#endif
 }

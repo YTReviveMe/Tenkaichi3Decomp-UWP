@@ -19,6 +19,9 @@
 #include <vector>
 #include <SDL3/SDL.h>
 #include "native.h"
+#ifdef BT3_UWP
+#include "../uwp/iso_io.h"
+#endif
 
 namespace {
 
@@ -152,7 +155,11 @@ struct Iso {
     void open(const std::string &path) {
         Uint8 pvd[2048];
         Uint32 lba, size;
+#ifdef BT3_UWP
+        io = PortUwp_OpenIO(path, false);
+#else
         io = SDL_IOFromFile(path.c_str(), "rb");
+#endif
         if (io == NULL) {
             throw Stop{"The disc image could not be opened: " + path};
         }
@@ -201,7 +208,11 @@ void check_cancel() {
 
 // Copies `size` bytes of the image at `offset` into a new file.
 void copy_out(Iso &iso, Uint64 offset, Uint64 size, const std::string &path, std::vector<Uint8> &buf) {
+#ifdef BT3_UWP
+    SDL_IOStream *out = PortUwp_OpenIO(path, true);
+#else
     SDL_IOStream *out = SDL_IOFromFile(path.c_str(), "wb");
+#endif
     if (out == NULL) {
         throw Stop{"Could not write " + path + ". Is the disk full or the folder read-only?"};
     }
@@ -257,10 +268,20 @@ void step_disc(Iso &iso, const std::string &path) {
 }
 
 void step_data(Iso &iso, const std::string &root) {
-    std::string data = root + "gamedata/", marker = data + ".installed";
-    SDL_PathInfo info;
+    std::string data = root +
+#ifdef BT3_UWP
+        "BT3/";
+#else
+        "gamedata/";
+#endif
+    std::string marker = data + ".installed";
     say("@step 2 3 Game data");
+#ifdef BT3_UWP
+    if (PortUwp_FileExists(marker)) {
+#else
+    SDL_PathInfo info;
     if (SDL_GetPathInfo(marker.c_str(), &info)) {
+#endif
         say("@skip already unpacked");
         return;
     }
@@ -291,7 +312,12 @@ void step_data(Iso &iso, const std::string &root) {
         bool afs = u.rfind("DATA/", 0) == 0 && u.size() > 4 && u.compare(u.size() - 4, 4, ".AFS") == 0;
         if (!afs) {
             std::string out = data + "disc/" + u; // upper case, as the game asks for them
+#ifdef BT3_UWP
+            if (!PortUwp_CreateDirectory(out.substr(0, out.rfind('/'))))
+                throw Stop{"Could not create the BT3 game data folder."};
+#else
             SDL_CreateDirectory(out.substr(0, out.rfind('/')).c_str());
+#endif
             copy_out(iso, f->offset, f->size, out, buf);
             files++;
             progress(f->size);
@@ -301,7 +327,11 @@ void step_data(Iso &iso, const std::string &root) {
         std::string stem = lower(u.substr(5, u.size() - 9)), dir = data + stem + "/";
         Uint8 head[8];
         Uint32 count;
+#ifdef BT3_UWP
+        if (!PortUwp_CreateDirectory(dir)) throw Stop{"Could not create the BT3 archive folder."};
+#else
         SDL_CreateDirectory(dir.c_str());
+#endif
         iso.read(f->offset, head, 8);
         memcpy(&count, head + 4, 4);
         if (memcmp(head, "AFS\0", 4) != 0 || (Uint64)count * 8 + 8 > f->size) {
@@ -323,16 +353,31 @@ void step_data(Iso &iso, const std::string &root) {
         }
         progress(f->size > inArchive ? f->size - inArchive : 0); // the archive's table and padding
     }
+#ifdef BT3_UWP
+    SDL_IOStream *m = PortUwp_OpenIO(marker, true);
+#else
     SDL_IOStream *m = SDL_IOFromFile(marker.c_str(), "wb");
+#endif
     if (m != NULL) {
         SDL_CloseIO(m);
     }
     char line[64];
-    snprintf(line, sizeof(line), "@ok %d files in gamedata/", files);
+    snprintf(line, sizeof(line), "@ok %d files in %s/", files,
+#ifdef BT3_UWP
+             "BT3"
+#else
+             "gamedata"
+#endif
+    );
     say(line);
 }
 
 void step_test(const std::string &root) {
+#ifdef BT3_UWP
+    (void)root;
+    say("@step 3 3 Ready");
+    say("@ok game data extracted; starting the game");
+#else
     std::string exe = root + kGame, saves = root + "gamedata/.selftest";
     const char *args[2] = {exe.c_str(), NULL};
     say("@step 3 3 Self-test");
@@ -398,6 +443,7 @@ void step_test(const std::string &root) {
         throw Stop{"The game's demo fight did not finish. Its last line was:\n" + last + "\nThe full output is in install.log."};
     }
     say("@ok the demo fight ran to its end");
+#endif
 }
 
 void work(std::string root, std::string path) {
@@ -408,7 +454,11 @@ void work(std::string root, std::string path) {
         step_data(iso, root);
         check_cancel();
         step_test(root);
+#ifdef BT3_UWP
+        say("@done " + root + "BT3/");
+#else
         say("@done " + root + kGame);
+#endif
     } catch (const Stop &s) {
         std::string why = s.why;
         for (size_t i = 0; (i = why.find('\n', i)) != std::string::npos;) {
@@ -453,6 +503,12 @@ void Native_Join() {
 }
 
 bool Native_Installed(const std::string &root) {
+#ifdef BT3_UWP
+    return PortUwp_FileExists(root + "BT3/.installed") &&
+           PortUwp_FileExists(root + "BT3/disc/SLUS_216.78") &&
+           PortUwp_FileExists(root + "BT3/disc/BIN/DBZP.BIN");
+#else
     SDL_PathInfo info;
     return SDL_GetPathInfo((root + "gamedata/.installed").c_str(), &info);
+#endif
 }

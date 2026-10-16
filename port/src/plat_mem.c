@@ -53,6 +53,9 @@ static uint8_t *sGameStackTop;
        comparing memory with a console dump does), and Port_Malloc just starts from wherever the region is;
      - the game's stack: if the process's own stack is above 4 GB, main() runs on a stack reserved low. */
 #include <windows.h>
+#ifdef BT3_UWP
+extern void PortUwp_Trace(const char *message);
+#endif
 
 /* Reserves `size` bytes somewhere between 0x30000000 and 2 GB (clear of the program at 0x20000000). */
 static void *low_alloc(size_t size) {
@@ -74,14 +77,49 @@ static void *low_alloc(size_t size) {
     return NULL;
 }
 
-static void map(uint32_t addr, uint32_t size, const char *what) {
-    uint32_t base = addr & ~0xFFFFu; /* reservations start on 64 KB boundaries */
+#ifdef BT3_UWP
+static char sFixedMemoryError[192];
+const char *PortUwp_FixedMemoryError(void) { return sFixedMemoryError; }
+#endif
 
-    if (VirtualAlloc((void *)(uintptr_t)base, size + (addr - base), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) != (void *)(uintptr_t)base) {
+static int map(uint32_t addr, uint32_t size, const char *what) {
+    uint32_t base = addr & ~0xFFFFu;
+    uint32_t length = size + (addr - base);
+
+    if (VirtualAlloc((void *)(uintptr_t)base, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) != (void *)(uintptr_t)base) {
+#ifdef BT3_UWP
+        DWORD alloc_error = GetLastError();
+        MEMORY_BASIC_INFORMATION existing = {0};
+        if (VirtualQuery((void *)(uintptr_t)base, &existing, sizeof(existing)) &&
+            existing.State == MEM_RESERVE && existing.RegionSize >= length &&
+            VirtualAlloc((void *)(uintptr_t)base, length, MEM_COMMIT, PAGE_READWRITE) == (void *)(uintptr_t)base) {
+            OutputDebugStringA("BT3: committed an existing low-address reservation\n");
+            return 1;
+        }
+        snprintf(sFixedMemoryError, sizeof(sFixedMemoryError),
+                 "Cannot map %s at 0x%08X; Windows error %lu, state %lu, allocation 0x%llx",
+                 what, addr, (unsigned long)alloc_error, (unsigned long)existing.State,
+                 (unsigned long long)(uintptr_t)existing.AllocationBase);
+        OutputDebugStringA(sFixedMemoryError);
+        OutputDebugStringA("\n");
+        return 0;
+#else
         fprintf(stderr, "bt3: cannot reserve %s at 0x%08X (error %lu)\n", what, addr, (unsigned long)GetLastError());
         exit(2);
+#endif
     }
+    return 1;
 }
+
+#ifdef BT3_UWP
+/* Claim the PS2 register addresses before WinRT storage, SDL, and the ISO
+   installer allocate memory. Their heaps can otherwise occupy 0x10000000. */
+int PortUwp_ReserveFixedMemory(void) {
+    return map(0x10000000u, 0x10000, "the hardware registers") &&
+           map(0x12000000u, 0x2000, "the GS registers") &&
+           map(0x70000000u, 0x4000, "the scratchpad");
+}
+#endif
 
 static void map_heap(void) {
     uint32_t base = HEAP_BASE & ~0xFFFFu;
@@ -126,7 +164,11 @@ PORT_HOST static int sArgc = 0, sResult = 0; /* (the process's own arguments: an
 PORT_HOST static char **sArgv = NULL;
 
 /* fn() with the stack pointer at `top` (Windows x64 calling convention: fn in rcx, top in rdx). */
+#ifdef BT3_UWP
+__asm__(".att_syntax prefix\n.text\n.globl Port_CallOnStack\nPort_CallOnStack:\n"
+#else
 __asm__(".text\n.globl Port_CallOnStack\nPort_CallOnStack:\n"
+#endif
         "    pushq %rbp\n    movq %rsp, %rbp\n    movq %rdx, %rsp\n    subq $32, %rsp\n    callq *%rcx\n"
         "    movq %rbp, %rsp\n    popq %rbp\n    retq\n");
 
@@ -134,13 +176,31 @@ static void game_main(void) {
     sResult = __real_main(sArgc, sArgv);
 }
 
+#ifdef BT3_UWP
+static void Port_MapMemory(void);
+#endif
+
 int __wrap_main(int argc, char **argv) {
     enum { STACK_SIZE = 0x01000000 };
     NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+#ifndef BT3_UWP
     void **dealloc = (void **)((uint8_t *)tib + 0x1478); /* TEB.DeallocationStack */
     void *base = tib->StackBase, *limit = tib->StackLimit, *old = *dealloc;
+#else
+    void *base = tib->StackBase, *limit = tib->StackLimit;
+#endif
     uint8_t *stack;
 
+#ifdef BT3_UWP
+    extern int PortUwp_InitStorage(void);
+    extern const char *PortUwp_StorageError(void);
+    if (!PortUwp_InitStorage()) {
+        fprintf(stderr, "bt3: Xbox storage initialization failed: %s\n", PortUwp_StorageError());
+        return 2;
+    }
+    Port_MapMemory();
+    PortUwp_Trace("Game memory mapped");
+#endif
     sArgc = argc;
     sArgv = argv;
     if (getenv("BT3_SIGN_TEST") != NULL) { /* testing the build key's signature (gs/net_match.c): prints and ends */
@@ -156,6 +216,9 @@ int __wrap_main(int argc, char **argv) {
     if ((uintptr_t)&stack < 0xFFF00000u) {
         sGameStackTop = (uint8_t *)__builtin_frame_address(0);
         gPortStage = "the game is running (on the process's own stack)";
+#ifdef BT3_UWP
+        PortUwp_Trace("Calling game main on process stack");
+#endif
         return __real_main(argc, argv); /* the process's own stack is low already */
     }
     gPortStage = "moving to a stack below 4 GB";
@@ -166,13 +229,17 @@ int __wrap_main(int argc, char **argv) {
     }
     tib->StackBase = stack + STACK_SIZE; /* the system checks these on exceptions and when the stack grows */
     tib->StackLimit = stack;
+#ifndef BT3_UWP
     *dealloc = stack;
+#endif
     sGameStackTop = stack + STACK_SIZE;
     gPortStage = "the game is running (on a stack of its own below 4 GB)";
     Port_CallOnStack(game_main, stack + STACK_SIZE);
     tib->StackBase = base;
     tib->StackLimit = limit;
+#ifndef BT3_UWP
     *dealloc = old;
+#endif
     return sResult;
 }
 
@@ -353,7 +420,11 @@ int __wrap_main(int argc, char **argv) {
 
 /* Set to 1 in the file by strip_data.py: this program does not work without its list. (2, not 0: it has to be in
    the file, not in the zero-filled part of memory.) */
+#ifdef BT3_UWP
+volatile uint32_t gPortDataStripped = 1;
+#else
 volatile uint32_t gPortDataStripped = 2;
+#endif
 
 static uint8_t *read_file(const char *path, size_t *size) {
     FILE *fp = fopen(path, "rb");
@@ -378,12 +449,21 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 static void data_fail(const char *what, const char *path) {
+#ifdef BT3_UWP
+    extern void PortUwp_Trace(const char *message);
+    PortUwp_Trace(what);
+    if (path) PortUwp_Trace(path);
+#endif
     fprintf(stderr, "bt3: %s%s%s\n     The game's data comes from your own disc image; run the setup (Tenkaichi3Decomp-setup) to unpack it.\n", what,
             path != NULL ? ": " : "", path != NULL ? path : "");
     exit(2);
 }
 
 static void Port_LoadGameData(void) {
+#ifdef BT3_UWP
+    extern void PortUwp_Trace(const char *message);
+    PortUwp_Trace("Loading game data manifest and disc files");
+#endif
     char exe[1024], path[1200];
     const char *root = getenv("BT3_DATA") != NULL ? getenv("BT3_DATA") : "gamedata";
     uint8_t *list, *elf, *src[2] = {NULL, NULL};
@@ -481,6 +561,9 @@ static void Port_LoadGameData(void) {
         uint32_t r[4]; /* address in this program, source, offset in it, length */
         const uint8_t *from;
         memcpy(r, list + 16 + (size_t)i * 16, 16);
+#ifdef BT3_UWP
+        r[0] += (uint32_t)(uintptr_t)GetModuleHandleW(NULL);
+#endif
         if (r[1] > 1 || (size_t)r[2] + r[3] > srcSize[r[1]]) {
             data_fail("damaged file (list of the game's data)", NULL);
         }
@@ -496,6 +579,9 @@ static void Port_LoadGameData(void) {
     if (hash != want) {
         data_fail("the game's programs in your game data are not the unmodified USA release (SLUS-21678)", NULL);
     }
+#ifdef BT3_UWP
+    PortUwp_Trace("Game data loaded");
+#endif
 }
 
 #if PORT_LOW_REGION
@@ -585,22 +671,43 @@ void Port_HeapRegion(uint8_t **base, uint32_t *size) {
 #if PORT_LOW_REGION
 static void low_region_take(void);
 #endif
-__attribute__((constructor)) static void Port_MapMemory(void) {
+#ifndef BT3_UWP
+__attribute__((constructor))
+#endif
+static void Port_MapMemory(void) {
 #ifdef _WIN32
+#ifdef BT3_UWP
+    {
+        char report[96];
+        extern void PortUwp_Trace(const char *message);
+        snprintf(report, sizeof(report), "Game image base: 0x%llx", (unsigned long long)(uintptr_t)GetModuleHandleW(NULL));
+        PortUwp_Trace(report);
+    }
+#endif
     /* The program only works at the address it was linked for (the game's pointers are 4 bytes and absolute). It
        carries no relocation table, so Windows has to load it there; should it be somewhere else all the same (a
        system set to move every program, "Mandatory ASLR", moved builds that still had the table: a crash at the
        first write, before anything was printed), say so instead of crashing. */
+#ifdef BT3_UWP
+    if ((uintptr_t)GetModuleHandleW(NULL) < 0x1F000000u ||
+        (uintptr_t)GetModuleHandleW(NULL) >= 0xE0000000u) {
+        static const char msg[] = "Tenkaichi3Decomp UWP loaded outside the low 32-bit address window.\n";
+#else
     if ((uintptr_t)GetModuleHandleA(NULL) != 0x20000000u) {
         static const char msg[] = "Tenkaichi3Decomp was loaded at a different address than the one it needs (0x20000000) and cannot run.\n"
                                   "If \"Force randomization for images (Mandatory ASLR)\" is switched on in Windows Security > App & browser "
                                   "control > Exploit protection, switch it off for this program.\n";
+#endif
         HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
         DWORD done;
         if (err != NULL && err != INVALID_HANDLE_VALUE) {
             WriteFile(err, msg, sizeof(msg) - 1, &done, NULL);
         } else {
+#ifdef BT3_UWP
+            OutputDebugStringA(msg);
+#else
             MessageBoxA(NULL, msg, "Tenkaichi3Decomp", MB_OK | MB_ICONERROR);
+#endif
         }
         ExitProcess(4);
     }
@@ -621,13 +728,24 @@ __attribute__((constructor)) static void Port_MapMemory(void) {
     low_region_take(); /* the region of Port_LowAlloc, now (see there) */
 #endif
 #if defined(__x86_64__) && defined(_WIN32)
+    #ifdef BT3_UWP
+    PortUwp_Trace("Taking low region");
+    #endif
     low_region_take();
 #endif
+    #ifdef BT3_UWP
+    PortUwp_Trace("Mapping game heap");
+    #endif
     map_heap();
+    #ifndef BT3_UWP
     map(0x10000000u, 0x10000, "the hardware registers");
     map(0x12000000u, 0x2000, "the GS registers");
     map(0x70000000u, 0x4000, "the scratchpad");
+    #endif
     gPortStage = "memory ready, before the program's main";
+#ifdef BT3_UWP
+    PortUwp_Trace("Memory map ready");
+#endif
 }
 
 /* The game's malloc (include/port_compat.h renames it): a bump allocator over the heap region, 16-byte aligned. */

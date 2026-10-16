@@ -1,0 +1,2 @@
+.globl D_3BE71C
+.set D_3BE71C, 0x3BE71C

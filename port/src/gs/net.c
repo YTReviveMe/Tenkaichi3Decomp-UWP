@@ -29,6 +29,9 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#ifdef BT3_UWP
+#include <fileapifromapp.h>
+#endif
 typedef int socklen_t;
 #else
 #include <arpa/inet.h>
@@ -40,6 +43,9 @@ typedef int socklen_t;
 #define closesocket close
 #endif
 #include "gs_internal.h"
+#ifdef BT3_UWP
+#include "../../uwp/storage.h"
+#endif
 
 extern int Port_PadRead(int socket, unsigned char *data); /* gs_input.c: the keyboard and the controllers */
 void Port_NetLeave(void);
@@ -1260,6 +1266,7 @@ int Port_NetView(void) {
 #include <unistd.h>
 #endif
 
+#ifndef BT3_UWP
 static void relaunch(int role, const char *join, int port) {
     char value[160];
 #ifdef _WIN32
@@ -1347,6 +1354,7 @@ static void relaunch(int role, const char *join, int port) {
     fprintf(stderr, "bt3: net: could not start the program again\n");
     exit(2);
 }
+#endif
 
 /* 1 in a session started from Dragon Net Battle. */
 int Port_NetSession(void) {
@@ -1368,6 +1376,35 @@ extern void Port_SessionReturn(void);
 static char sSavesBefore[512];
 static int sSavesWasSet;
 
+static const char *session_saves(void) {
+#ifdef BT3_UWP
+    static char path[512];
+    snprintf(path, sizeof(path), "%s/net_session", PortUwp_LocalPath());
+    return path;
+#else
+    return "net_session";
+#endif
+}
+
+static void clear_session_save(const char *root) {
+    static const char *const names[] = {
+        "BASLUS-21678DBZT3", "icon.sys", "dbzsm.ico"
+    };
+    size_t i;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char path[640];
+        snprintf(path, sizeof(path), "%s/card1/BASLUS-21678DBZT3/%s", root, names[i]);
+#ifdef BT3_UWP
+        wchar_t wide[640];
+        if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 640) > 0) {
+            DeleteFileFromAppW(wide);
+        }
+#else
+        remove(path);
+#endif
+    }
+}
+
 static void put_env(const char *name, const char *value) {
 #ifdef _WIN32
     SetEnvironmentVariableA(name, value);
@@ -1388,11 +1425,16 @@ void Port_NetSessionBegin(int role, const char *address, int port) {
         snprintf(sSavesBefore, sizeof(sSavesBefore), "%s", saves != NULL ? saves : "");
     }
     /* the session's own save folder starts empty: both sides begin from the game's defaults */
-    remove("net_session/card1/BASLUS-21678DBZT3/BASLUS-21678DBZT3");
-    remove("net_session/card1/BASLUS-21678DBZT3/icon.sys");
-    remove("net_session/card1/BASLUS-21678DBZT3/dbzsm.ico");
+    clear_session_save(session_saves());
     sVoiceAlt = own_voice_alt(); /* (before the save folder changes: it is read from the player's own) */
-    put_env("BT3_SAVES", "net_session");
+#ifdef BT3_UWP
+    if (!PortUwp_EnsureDirectory(session_saves())) {
+        fprintf(stderr, "bt3: net: could not create the Xbox session save folder\n");
+        Port_NetLeave();
+        return;
+    }
+#endif
+    put_env("BT3_SAVES", session_saves());
     snprintf(host, sizeof(host), "%d", port);
     snprintf(join, sizeof(join), "%s:%d", address, port);
     if (sSock >= 0) {
@@ -1450,7 +1492,12 @@ void Port_NetLeave(void) {
     if (Port_SessionCan()) {
         Port_SessionReturn(); /* the game as it was when the session was asked for (does not return) */
     }
+#ifdef BT3_UWP
+    Port_UiNotice("Online session could not return to the menu. Restart the app.");
+    Port_NetSessionEnd();
+#else
     relaunch(0, NULL, 0);
+#endif
 }
 
 /* ---- the lobby: called from the settings code's window (ui.cpp), once a frame ---- */
@@ -1480,6 +1527,13 @@ const char *Port_LobbyError(void) { return sCodeError; }
 int Port_LobbyStart(int host, const char *address, int port) {
     struct sockaddr_in local;
 
+#ifdef BT3_UWP
+    if (!Port_SessionCan()) {
+        snprintf(sCodeError, sizeof(sCodeError), "%s", "Online state map is unavailable. Reinstall the complete Xbox package.");
+        sLobby = -3;
+        return sLobby;
+    }
+#endif
     if (sHandSock >= 0) { /* (a session that was asked for and never began) */
         closesocket(sHandSock);
         sHandSock = -1;
@@ -1778,7 +1832,11 @@ void Port_LobbyAuto(void) {
             Port_NetSpeedSet(NET_SPEED_STANDARD);
             Port_NetRulesSet(type, dp, 4); /* (a queue's rules: its battle type, no time limit, 120%) */
             if (getenv("BT3_NET_ROLLBACK") == NULL && getenv("BT3_NET_DELAY") == NULL) {
+#ifdef BT3_UWP
+                Port_NetOptions(0, -2);
+#else
                 Port_NetOptions(Port_RollCan() ? 8 : 0, -2); /* (and a quick match's fixed rollback and delay, as the window sets them) */
+#endif
             }
             Port_LobbyStartQuick(q);
         } else {
@@ -1820,7 +1878,11 @@ void Port_LobbyLaunch(void) {
         Port_SessionRequest(sLobbyRole, sLobbyAddr, sLobbyPort); /* the game's thread makes the change at its next blank */
         return;
     }
+#ifdef BT3_UWP
+    Port_UiNotice("Online state map is unavailable. Reinstall the complete Xbox package.");
+#else
     relaunch(sLobbyRole, sLobbyAddr, sLobbyPort);
+#endif
 }
 
 /* For the meter (ui.cpp). 0 when no match is on; else out = ping in ms (-1 not known yet), going back per second,
@@ -1852,10 +1914,20 @@ int Port_LobbyOther(void) {
    session begins wherever the game is (it starts from the game's first moment anyway). */
 static int sLobbyBg;
 
+static const char *online_name_path(void) {
+#ifdef BT3_UWP
+    static char path[640];
+    snprintf(path, sizeof(path), "%s/online_name.txt", PortUwp_LocalPath());
+    return path;
+#else
+    return "online_name.txt";
+#endif
+}
+
 const char *Port_NetNameGet(void) {
     static int loaded;
     if (!loaded) {
-        FILE *f = fopen("online_name.txt", "rb");
+        FILE *f = fopen(online_name_path(), "rb");
         loaded = 1;
         if (f != NULL) {
             char line[64] = "";
@@ -1874,7 +1946,7 @@ const char *Port_NetNameGet(void) {
 void Port_NetNameSave(const char *name) {
     FILE *f;
     Port_NetNameSet(name);
-    f = fopen("online_name.txt", "wb");
+    f = fopen(online_name_path(), "wb");
     if (f != NULL) {
         fputs(sMyName, f);
         fclose(f);

@@ -21,7 +21,14 @@
 #include <string.h>
 #include "gs_internal.h"
 #include "gs_draw.h"
+#ifdef BT3_UWP
+#include "dxil_shaders.h"
+extern void PortUwp_Trace(const char *message);
+#define GPU_TRACE(message) PortUwp_Trace(message)
+#else
 #include "shaders.h" /* generated: kGsVertSpv, kGsFragSpv */
+#define GPU_TRACE(message) ((void)0)
+#endif
 #include "ui.h"
 
 extern int Port_Setting(const char *name, int def); /* plat_settings.c: the saved settings */
@@ -63,7 +70,11 @@ static int sPendingCount;
 
 static uint64_t gpu_now(void) { return SDL_GetTicksNS(); }
 
-#ifdef __APPLE__ /* Metal: the shaders as MSL (undefined.py translates the SPIR-V with spirv-cross, entry point main0) */
+#ifdef BT3_UWP
+#define SHADER_FORMAT SDL_GPU_SHADERFORMAT_DXIL
+#define SHADER_ENTRY "main"
+#define SHADER_CODE(name) name##Dxil, sizeof(name##Dxil)
+#elif defined(__APPLE__) /* Metal: the shaders as MSL (undefined.py translates the SPIR-V with spirv-cross, entry point main0) */
 #define SHADER_FORMAT SDL_GPU_SHADERFORMAT_MSL
 #define SHADER_ENTRY "main0"
 #define SHADER_CODE(name) name##Msl, sizeof(name##Msl) - 1
@@ -402,21 +413,39 @@ static int vk_init(void) {
     const char *gpuName = NULL;
     int i;
 
+#ifdef BT3_UWP
+    /* SDL_Init runs again after setup. */
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_WGI, "1", SDL_HINT_OVERRIDE);
+#endif
+    GPU_TRACE("GPU: initializing SDL video");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "bt3: SDL_Init: %s\n", SDL_GetError());
         return 0;
     }
+#ifdef BT3_UWP
+    { extern void PortUwp_AudioStart(void); PortUwp_AudioStart(); }
+#endif
+    GPU_TRACE("GPU: creating device");
     sDev = SDL_CreateGPUDevice(SHADER_FORMAT, getenv("BT3_GPU_DEBUG") != NULL, NULL);
+    if (sDev == NULL) {
+        GPU_TRACE("GPU: device creation failed");
+        fprintf(stderr, "bt3: GPU device: %s\n", SDL_GetError());
+        return 0;
+    }
+    GPU_TRACE("GPU: checking depth format");
     sShadowStencil = sDev != NULL && SDL_GPUTextureSupportsFormat(sDev, SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT,
         SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
     sDepthFormat = sShadowStencil ? SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT : SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     if (sDev != NULL && !sShadowStencil) {
         fprintf(stderr, "bt3: shadow stencil unavailable; flat shadows may show overlapping model parts\n");
     }
-    sWindow = GsDraw_WindowCreate(0); /* the shared window: shape, display and full screen decided there */    if (sWindow == NULL || !SDL_ClaimWindowForGPUDevice(sDev, sWindow)) {
+    GPU_TRACE("GPU: creating gameplay window");
+    sWindow = GsDraw_WindowCreate(0); /* the shared window: shape, display and full screen decided there */
+    if (sWindow == NULL || !SDL_ClaimWindowForGPUDevice(sDev, sWindow)) {
         fprintf(stderr, "bt3: no GPU window: %s\n", SDL_GetError());
         return 0;
     }
+    GPU_TRACE("GPU: window claimed; creating shaders");
     /* The game paces itself at 30 frames per second; waiting for the display's own refresh on top of that
        (VSYNC) costs up to a refresh period per frame. Prefer MAILBOX (no tearing, no wait), then IMMEDIATE. */
     vsync_apply(Port_Setting("vsync", 0)); /* (the setting "V-sync" asks for the wait all the same) */
@@ -427,6 +456,7 @@ static int vk_init(void) {
         fprintf(stderr, "bt3: shaders: %s\n", SDL_GetError());
         return 0;
     }
+    GPU_TRACE("GPU: shaders ready; creating buffers");
     SDL_zero(bi);
     bi.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     bi.size = MAX_VERTS * sizeof(Vtx);
@@ -480,6 +510,7 @@ static int vk_init(void) {
         memcpy(sPending[sPendingCount].px, &white, 4);
         sPendingCount++;
     }
+    GPU_TRACE("GPU: buffers ready; creating pipelines");
     {   /* native outline: destination minus source on the colour channels */
         SDL_GPUShader *vs = sFxVs = shader(SHADER_CODE(kFxVert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
         SDL_GPUShader *fs = shader(SHADER_CODE(kOutlineFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
@@ -522,6 +553,7 @@ static int vk_init(void) {
         }
     }
     sDclutFs = shader(SHADER_CODE(kDclutFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 3, 1);
+    GPU_TRACE("GPU: pipelines ready; creating copy textures");
     copies_create();
 #if SDL_VERSION_ATLEAST(3, 4, 0)
     {   /* the graphics card's name, for F1 > Video */
@@ -531,12 +563,15 @@ static int vk_init(void) {
         }
     }
 #endif
+    GPU_TRACE("GPU: initializing settings UI");
     if (!Ui_Init(sWindow, sDev, NULL, gpuName)) {
         fprintf(stderr, "bt3: the settings window could not be set up\n");
     }
     fprintf(stderr, "bt3: GPU renderer: %s\n", SDL_GetGPUDeviceDriver(sDev));
     fprintf(stderr, "bt3: %d logical processors, %d MB of memory\n", SDL_GetNumLogicalCPUCores(), SDL_GetSystemRAM());
+    GPU_TRACE("GPU: preloading pipelines");
     pipelines_preload();
+    GPU_TRACE("GPU: renderer ready");
     return 1;
 }
 

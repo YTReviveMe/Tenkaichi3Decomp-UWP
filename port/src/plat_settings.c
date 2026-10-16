@@ -27,8 +27,13 @@ static pthread_once_t sOnce = PTHREAD_ONCE_INIT;
 static pthread_mutex_t sLock = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *path(void) {
+#ifdef BT3_UWP
+    extern const char *PortUwp_SettingsPath(void);
+    return PortUwp_SettingsPath();
+#else
     const char *p = getenv("BT3_SETTINGS");
     return p == NULL ? "bt3_settings.txt" : p[0] == '\0' ? NULL : p;
+#endif
 }
 
 static void load(void) {

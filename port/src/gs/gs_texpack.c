@@ -19,6 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef BT3_UWP
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 #include <SDL3/SDL.h>
 #define XXH_INLINE_ALL
 #include "../../third_party/xxhash/xxhash.h"
@@ -34,6 +38,12 @@ typedef struct Entry {
 
 static Entry *sEntries;
 static uint32_t sCount, sCap, *sBucket, sBuckets;
+
+#ifdef BT3_UWP
+#define TEXPACK_FILE_LIMIT (64u * 1024u * 1024u)
+#define TEXPACK_DIM_LIMIT 4096u
+#define TEXPACK_ENTRY_LIMIT 100000u
+#endif
 
 static uint32_t bucket_of(uint64_t tex, uint64_t clut, uint32_t bits) {
     uint64_t h = (tex ^ (clut * 0x9E3779B97F4A7C15ull) ^ bits) * 0x9FB21C651E98DF25ull;
@@ -86,15 +96,66 @@ static void add(const char *dir, const char *name) {
     e.clut = e.pal ? strtoull(part[1], NULL, 16) : 0;
     e.bits = (uint32_t)strtoul(part[parts - 1], NULL, 16);
     e.path = malloc(strlen(dir) + n + 1);
+    if (e.path == NULL) {
+        return;
+    }
     strcpy(e.path, dir);
     strcat(e.path, name);
+#ifdef BT3_UWP
+    if (sCount >= TEXPACK_ENTRY_LIMIT) {
+        free(e.path);
+        return;
+    }
+#endif
     if (sCount == sCap) {
-        sCap = sCap ? sCap * 2 : 4096;
-        sEntries = realloc(sEntries, sCap * sizeof(Entry));
+        uint32_t cap = sCap ? sCap * 2 : 4096;
+        Entry *entries = realloc(sEntries, cap * sizeof(Entry));
+        if (entries == NULL) {
+            free(e.path);
+            return;
+        }
+        sEntries = entries;
+        sCap = cap;
     }
     sEntries[sCount++] = e;
 }
 
+#ifdef BT3_UWP
+/* UWP directory access uses the FromApp dirent shim. */
+static void walk_uwp(const char *dir, unsigned depth) {
+    DIR *search = opendir(dir);
+    struct dirent *item;
+
+    if (search == NULL) {
+        return;
+    }
+    while ((item = readdir(search)) != NULL) {
+        struct stat info;
+        size_t n;
+        char *path;
+
+        if (strcmp(item->d_name, ".") == 0 || strcmp(item->d_name, "..") == 0) {
+            continue;
+        }
+        n = strlen(dir) + strlen(item->d_name) + 2;
+        path = malloc(n);
+        if (path == NULL) {
+            break;
+        }
+        snprintf(path, n, "%s%s", dir, item->d_name);
+        if (stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR) {
+            if (depth < 16) {
+                strcat(path, "/");
+                walk_uwp(path, depth + 1);
+            }
+        } else {
+            add(dir, item->d_name);
+        }
+        free(path);
+    }
+    closedir(search);
+}
+#else
 static SDL_EnumerationResult SDLCALL walk(void *userdata, const char *dir, const char *name) {
     size_t n = strlen(dir) + strlen(name) + 2;
     char *path = malloc(n);
@@ -111,30 +172,69 @@ static SDL_EnumerationResult SDLCALL walk(void *userdata, const char *dir, const
     free(path);
     return SDL_ENUM_CONTINUE;
 }
+#endif
 
 void TexPack_Init(void) {
     const char *root = getenv("BT3_TEXTURES") != NULL ? getenv("BT3_TEXTURES") : "textures";
     size_t n = strlen(root);
     char *dir = malloc(n + 2);
     uint32_t i, dup = 0;
+#ifdef BT3_UWP
+    struct stat info;
+#else
     SDL_PathInfo info;
+#endif
 
-    if (root[0] == '\0' || !SDL_GetPathInfo(root, &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Texture pack: checking folder"); }
+#endif
+    if (root[0] == '\0' ||
+#ifdef BT3_UWP
+        stat(root, &info) != 0 || (info.st_mode & S_IFMT) != S_IFDIR
+#else
+        !SDL_GetPathInfo(root, &info) || info.type != SDL_PATHTYPE_DIRECTORY
+#endif
+    ) {
+#ifdef BT3_UWP
+        { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Texture pack: folder unavailable; skipping"); }
+#endif
         free(dir);
         return;
     }
+    if (dir == NULL) {
+        return;
+    }
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Texture pack: scanning folder"); }
+#endif
     strcpy(dir, root);
     if (dir[n - 1] != '/' && dir[n - 1] != '\\') {
         strcat(dir, "/");
     }
+#ifdef BT3_UWP
+    walk_uwp(dir, 0);
+#else
     SDL_EnumerateDirectory(dir, walk, NULL);
+#endif
     free(dir);
+#ifdef BT3_UWP
+    {
+        char message[96];
+        extern void PortUwp_Trace(const char *message);
+        snprintf(message, sizeof(message), "Texture pack: scan complete (%u files)", sCount);
+        PortUwp_Trace(message);
+    }
+#endif
     if (sCount == 0) {
         return;
     }
     for (sBuckets = 1024; sBuckets < sCount * 2; sBuckets *= 2) {
     }
     sBucket = calloc(sBuckets, sizeof(uint32_t));
+    if (sBucket == NULL) {
+        sCount = 0;
+        return;
+    }
     for (i = 0; i < sCount; i++) {
         const Entry *e = &sEntries[i];
         uint32_t h = bucket_of(e->tex, e->clut, e->bits) & (sBuckets - 1);
@@ -232,12 +332,62 @@ const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw
 
 /* A PNG: decoded by SDL, and its smaller copies (mip levels) made here, each the average of 2 x 2 pixels of the one
    before. */
+#ifdef BT3_UWP
+static uint8_t *load_file_uwp(const char *path, size_t *size) {
+    FILE *file = fopen(path, "rb");
+    long length;
+    uint8_t *bytes;
+
+    *size = 0;
+    if (file == NULL) {
+        return NULL;
+    }
+    if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) <= 0 ||
+        (unsigned long)length > TEXPACK_FILE_LIMIT || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    bytes = SDL_malloc((size_t)length);
+    if (bytes == NULL || fread(bytes, 1, (size_t)length, file) != (size_t)length) {
+        SDL_free(bytes);
+        fclose(file);
+        return NULL;
+    }
+    fclose(file);
+    *size = (size_t)length;
+    return bytes;
+}
+
+static uint32_t png_be32(const uint8_t *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+#endif
+
 static int load_png(const char *path, TexPackImage *img) {
-    SDL_Surface *png = SDL_LoadPNG(path), *rgba;
+    SDL_Surface *png, *rgba;
     uint32_t w, h, total = 0, lw, lh, at = 0, x, y, c;
     int level, levels = 0;
     uint8_t *f;
 
+#ifdef BT3_UWP
+    size_t size;
+    uint8_t *bytes = load_file_uwp(path, &size);
+    SDL_IOStream *io;
+    if (bytes == NULL) {
+        return 0;
+    }
+    if (size < 24 || memcmp(bytes, "\x89PNG\r\n\x1a\n", 8) != 0 ||
+        png_be32(bytes + 16) == 0 || png_be32(bytes + 20) == 0 ||
+        png_be32(bytes + 16) > TEXPACK_DIM_LIMIT || png_be32(bytes + 20) > TEXPACK_DIM_LIMIT) {
+        SDL_free(bytes);
+        return 0;
+    }
+    io = SDL_IOFromConstMem(bytes, size);
+    png = io != NULL ? SDL_LoadPNG_IO(io, true) : NULL;
+    SDL_free(bytes);
+#else
+    png = SDL_LoadPNG(path);
+#endif
     if (png == NULL) {
         return 0;
     }
@@ -257,6 +407,10 @@ static int load_png(const char *path, TexPackImage *img) {
         }
     }
     f = SDL_malloc(total);
+    if (f == NULL) {
+        SDL_DestroySurface(rgba);
+        return 0;
+    }
     for (y = 0; y < h; y++) {
         memcpy(f + y * w * 4, (const uint8_t *)rgba->pixels + y * (uint32_t)rgba->pitch, w * 4);
     }
@@ -300,7 +454,11 @@ int TexPack_Load(const char *path, TexPackImage *img) {
     if (strlen(path) > 4 && SDL_strcasecmp(path + strlen(path) - 4, ".png") == 0) {
         return load_png(path, img);
     }
+#ifdef BT3_UWP
+    f = load_file_uwp(path, &size);
+#else
     f = SDL_LoadFile(path, &size);
+#endif
     if (f == NULL || size < 128 || memcmp(f, "DDS ", 4) != 0) {
         SDL_free(f);
         return 0;
@@ -311,7 +469,11 @@ int TexPack_Load(const char *path, TexPackImage *img) {
     memcpy(&flags, f + 80, 4);
     memcpy(&fourcc, f + 84, 4);
     memcpy(&bpp, f + 88, 4);
-    if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+    if (w == 0 || h == 0 || w > 8192 || h > 8192
+#ifdef BT3_UWP
+        || w > TEXPACK_DIM_LIMIT || h > TEXPACK_DIM_LIMIT
+#endif
+    ) {
         SDL_free(f);
         return 0;
     }

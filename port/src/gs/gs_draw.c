@@ -26,6 +26,11 @@
 #include "gs_texpack.h" /* texture packs (replacement textures) */
 #include "menu_text.h"  /* editable labels in the original menu texture slots */
 #include <math.h>
+#ifdef BT3_UWP
+#define GS_MAX_SCALE 4
+#else
+#define GS_MAX_SCALE 8
+#endif
 
 /* Stage-name overlay: defined here (C) so both the renderer (gs_gpu.c) and the game's menu (menu_c_e.c) can
    reach them without C++ name mangling. Where they mean is in ui.h. */
@@ -122,6 +127,7 @@ typedef struct Tex {
     uint32_t gen;
     GsTex tex;
     unsigned last; /* frame last used */
+    uint32_t bytes;
     int replaced;  /* 1: texture pack, 2: vector menu labels, 3: packed shared glyphs */
     uint32_t ow, oh, rw, rh; /* then: the original's size and the replacement's */
     uint32_t amax;           /* and the largest alpha byte of the original */
@@ -129,6 +135,7 @@ typedef struct Tex {
 static Tex sTex[MAX_TEX];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
 static Tex *sLast; /* the entry the previous lookup returned */
+static uint64_t sTexBytes;
 
 /* The 256-colour tables as textures, by hash of the palette entries they use (64 slots). */
 static struct { uint32_t hash, last; GsTex tex; } sCluts[MAX_CLUTS];
@@ -137,6 +144,83 @@ static uint32_t tex_bucket(uint64_t t0, uint64_t texa, uint32_t gen) {
     uint64_t h = (t0 ^ (texa * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)gen << 17)) * 0xD6E8FEB86659FD93ull;
     return (uint32_t)(h >> 40) & (TEX_BUCKETS - 1);
 }
+
+static void tex_rehash(void) {
+    int i;
+
+    sLast = NULL;
+    memset(sTexBucket, 0, sizeof(sTexBucket));
+    for (i = 0; i < gsTexCount; i++) {
+        uint32_t h = tex_bucket(sTex[i].tex0, sTex[i].texa, sTex[i].gen);
+        while (sTexBucket[h] != 0) {
+            h = (h + 1) & (TEX_BUCKETS - 1);
+        }
+        sTexBucket[h] = (uint16_t)(i + 1);
+    }
+}
+
+static void tex_compact(unsigned keep) {
+    int n = 0, i;
+
+    for (i = 0; i < gsTexCount; i++) {
+        if (sTex[i].last >= keep) {
+            sTex[n++] = sTex[i];
+        } else {
+            sTexBytes -= sTex[i].bytes;
+            sBackend->texDestroy(sTex[i].tex);
+        }
+    }
+    gsTexCount = n;
+    tex_rehash();
+}
+
+#ifdef BT3_UWP
+static int tex_oldest_first(const void *left, const void *right) {
+    const Tex *a = &sTex[*(const uint16_t *)left];
+    const Tex *b = &sTex[*(const uint16_t *)right];
+
+    if (a->last != b->last) {
+        return a->last < b->last ? -1 : 1;
+    }
+    return a->bytes > b->bytes ? -1 : a->bytes < b->bytes ? 1 : 0;
+}
+
+static void tex_trim_bytes(uint64_t incoming, uint64_t limit) {
+    uint16_t order[MAX_TEX];
+    uint8_t drop[MAX_TEX] = {0};
+    int count = 0, i, n;
+    uint64_t needed;
+
+    if (sTexBytes + incoming <= limit) {
+        return;
+    }
+    needed = sTexBytes + incoming - limit;
+    for (i = 0; i < gsTexCount; i++) {
+        if (sTex[i].last < gGsFrame) {
+            order[count++] = (uint16_t)i;
+        }
+    }
+    qsort(order, (size_t)count, sizeof(order[0]), tex_oldest_first);
+    for (i = 0; i < count && needed > 0; i++) {
+        int index = order[i];
+        drop[index] = 1;
+        needed = sTex[index].bytes >= needed ? 0 : needed - sTex[index].bytes;
+    }
+    if (i == 0) {
+        return;
+    }
+    for (n = 0, i = 0; i < gsTexCount; i++) {
+        if (drop[i]) {
+            sTexBytes -= sTex[i].bytes;
+            sBackend->texDestroy(sTex[i].tex);
+        } else {
+            sTex[n++] = sTex[i];
+        }
+    }
+    gsTexCount = n;
+    tex_rehash();
+}
+#endif
 
 /* A hash of the palette entries a texture uses (16 or 256 at `cbp`), remembered until one of the palette's pages is
    written again. The page hashes are too coarse here: a page holds up to 32 palettes, and the game rewrites some
@@ -382,27 +466,10 @@ static GsTex texture_get(int ctx) {
         return gsWhite;
     }
     if (gsTexCount == MAX_TEX) {
-        /* full: drop everything not used for two seconds (or, failing that, not used this frame) in one sweep */
         unsigned keep = gGsFrame > 120 ? gGsFrame - 120 : 0;
-        int pass, n;
-        for (pass = 0; pass < 2 && gsTexCount == MAX_TEX; pass++, keep = gGsFrame) {
-            for (n = 0, i = 0; i < (uint32_t)gsTexCount; i++) {
-                if (sTex[i].last >= keep) {
-                    sTex[n++] = sTex[i];
-                } else {
-                    sBackend->texDestroy(sTex[i].tex);
-                }
-            }
-            gsTexCount = n;
-        }
-        sLast = NULL;
-        memset(sTexBucket, 0, sizeof(sTexBucket));
-        for (i = 0; i < (uint32_t)gsTexCount; i++) {
-            uint32_t h = tex_bucket(sTex[i].tex0, sTex[i].texa, sTex[i].gen);
-            while (sTexBucket[h] != 0) {
-                h = (h + 1) & (TEX_BUCKETS - 1);
-            }
-            sTexBucket[h] = (uint16_t)(i + 1);
+        tex_compact(keep);
+        if (gsTexCount == MAX_TEX) {
+            tex_compact(gGsFrame);
         }
         if (gsTexCount == MAX_TEX) {
             return gsWhite; /* this one frame uses more textures than the cache holds */
@@ -460,6 +527,19 @@ static GsTex texture_get(int ctx) {
         }
     }
     gGpuTexNs += gpu_now() - tex_t0;
+#ifdef BT3_UWP
+    {
+        uint64_t incoming = replaced ? 0 : (uint64_t)rw * rh * 4;
+        const uint64_t limit = 1024ull * 1024 * 1024;
+        if (replaced) {
+            int level;
+            for (level = 0; level < pack.levels; level++) {
+                incoming += pack.bytes[level];
+            }
+        }
+        tex_trim_bytes(incoming, limit);
+    }
+#endif
     t = &sTex[gsTexCount];
     t->tex = replaced ? sBackend->texCreate(rw, rh, packFormat, pack.levels) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {
@@ -471,11 +551,23 @@ static GsTex texture_get(int ctx) {
     }
     if (replaced) {
         int level;
+        void *copies[TEXPACK_MAX_LEVELS] = {0};
+        for (level = 0; level < pack.levels; level++) {
+            copies[level] = malloc(pack.bytes[level]);
+            if (copies[level] == NULL) {
+                int j;
+                for (j = 0; j < level; j++) {
+                    free(copies[j]);
+                }
+                sBackend->texDestroy(t->tex);
+                TexPack_Free(&pack);
+                return gsWhite;
+            }
+            memcpy(copies[level], pack.data[level], pack.bytes[level]);
+        }
         for (level = 0; level < pack.levels; level++) {
             uint32_t lw = pack.w >> level ? pack.w >> level : 1, lh = pack.h >> level ? pack.h >> level : 1;
-            void *buf = malloc(pack.bytes[level]);
-            memcpy(buf, pack.data[level], pack.bytes[level]);
-            sBackend->texUpload(t->tex, level, lw, lh, packFormat, buf, pack.bytes[level]);
+            sBackend->texUpload(t->tex, level, lw, lh, packFormat, copies[level], pack.bytes[level]);
         }
         TexPack_Free(&pack);
     } else {
@@ -507,6 +599,14 @@ static GsTex texture_get(int ctx) {
     t->texa = texa;
     t->gen = gen;
     t->last = gGsFrame;
+    t->bytes = replaced ? 0 : rw * rh * 4;
+    if (replaced) {
+        int level;
+        for (level = 0; level < pack.levels; level++) {
+            t->bytes += pack.bytes[level];
+        }
+    }
+    sTexBytes += t->bytes;
     t->replaced = replaced ? 1 : sharedText ? 3 : menuText ? 2 : 0;
     t->ow = tw;
     t->oh = th;
@@ -1722,7 +1822,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     PortVideo now;
     GsGpu_GetSettings(&now);
     if (v->scale != now.scale) {
-        gsPendingScale = v->scale < 1 ? 1 : v->scale > 8 ? 8 : v->scale; /* applied between two frames */
+        gsPendingScale = v->scale < 1 ? 1 : v->scale > GS_MAX_SCALE ? GS_MAX_SCALE : v->scale; /* applied between two frames */
     }
     if (v->aspectMilli != now.aspectMilli) {
         Port_SetAspectMilli(v->aspectMilli);
@@ -1748,7 +1848,9 @@ void GsGpu_SetSettings(const PortVideo *v) {
     }
     if (v->vsync != now.vsync) { /* (whichever back end draws) */
         GsGpu_Vsync(v->vsync);
+#ifndef BT3_UWP
         GsGl_Vsync(v->vsync);
+#endif
         Port_SettingSave("vsync", v->vsync);
     }
     sDisplaySetting = v->display;
@@ -1779,15 +1881,26 @@ int GsGpu_Init(void) {
     GsBackend *sb;
 
     gsScale = getenv("BT3_SCALE") != NULL ? atoi(getenv("BT3_SCALE")) : Port_Setting("scale", 2);
-    gsScale = gsScale < 1 ? 1 : gsScale > 8 ? 8 : gsScale;
+    gsScale = gsScale < 1 ? 1 : gsScale > GS_MAX_SCALE ? GS_MAX_SCALE : gsScale;
     gsPendingScale = 0;
     gsVerts = malloc(MAX_VERTS * sizeof(Vtx));
     gsVuVerts = malloc(MAX_VU_VERTS * 48);
     gsVuIdx = malloc(MAX_VU_IDX * sizeof(uint32_t));
     gsVuUni = malloc(MAX_VU_UNIFORMS * sizeof(Vu0Uniform));
     gsDraws = malloc(MAX_DRAWS * sizeof(GsDraw));
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: CPU buffers allocated"); }
+#endif
+    if (gsVerts == NULL || gsVuVerts == NULL || gsVuIdx == NULL || gsVuUni == NULL || gsDraws == NULL) {
+        fprintf(stderr, "bt3: graphics CPU buffer allocation failed\n");
+        return 0;
+    }
     /* BT3_GPU_API=vulkan|gl|auto picks the back end. Both are complete renderers of the same list, so a
        picture from either should be the same (see the frame-by-frame compare in the port's docs). */
+#ifdef BT3_UWP
+    sb = &sVulkanBackend;
+    api = NULL;
+#else
     if (api == NULL || strcmp(api, "auto") == 0) {
         /* the settings window's choice (Renderer; Vulkan unless OpenGL was picked there) */
         sb = Port_Setting("gpu_api", 0) == 1 ? &sGlBackend : &sVulkanBackend;
@@ -1800,8 +1913,13 @@ int GsGpu_Init(void) {
         fprintf(stderr, "bt3: unknown BT3_GPU_API=%s (try vulkan, gl or auto)\n", api);
         return 0;
     }
+#endif
     sBackend = sb;
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: starting GPU backend"); }
+#endif
     if (!sb->init()) {
+#ifndef BT3_UWP
         /* The chosen renderer cannot start (no Vulkan driver, an old graphics card): the other one is tried,
            unless one was asked for by name. */
         GsBackend *other = sb == &sVulkanBackend ? &sGlBackend : &sVulkanBackend;
@@ -1817,12 +1935,31 @@ int GsGpu_Init(void) {
             sBackend = NULL;
             return 0;
         }
+#else
+        sBackend = NULL;
+        return 0;
+#endif
     }
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: GPU backend ready"); }
+#endif
     gsWhite = sb->whiteTex();
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: white texture ready"); }
+#endif
     gsFxOff = (unsigned)(getenv("BT3_FX_OFF") != NULL ? atoi(getenv("BT3_FX_OFF")) : Port_Setting("fx_off", 0)) & 63;
     gsGlowPercent = getenv("BT3_GLOW") != NULL ? atoi(getenv("BT3_GLOW")) : Port_Setting("glow", GLOW_DEFAULT);
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: display settings loaded; initializing menu font"); }
+#endif
     MenuText_SetFontId(Port_Setting("menu_font_id", 0));
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: menu font initialized; initializing shared font"); }
+#endif
     MenuText_SetSharedFontId(Port_Setting("text_font_id", 0));
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: shared font initialized"); }
+#endif
     sTexPackOn = Port_Setting("texture_pack", 1) != 0;
     sSmooth2d = getenv("BT3_2D_SMOOTH") != NULL ? atoi(getenv("BT3_2D_SMOOTH")) != 0 : Port_Setting("smooth_2d", 1) != 0;
     gPortMusicPercent = Port_Setting("music", 100);
@@ -1832,7 +1969,13 @@ int GsGpu_Init(void) {
     sHudLayout = sHudLayout < 0 || sHudLayout > 2 ? 0 : sHudLayout;
     gPortVoicePercent = Port_Setting("voices", gPortSePercent); /* (one slider before 0.1.30: what it was set to) */
     gPortStagePercent = Port_Setting("stage_sounds", gPortSePercent);
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: audio settings loaded; initializing texture pack"); }
+#endif
     TexPack_Init();
+#ifdef BT3_UWP
+    { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: texture pack initialized"); }
+#endif
     return 1;
 }
 

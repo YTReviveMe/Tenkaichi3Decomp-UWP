@@ -29,6 +29,13 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef BT3_UWP
+#include <SDL3/SDL_filesystem.h>
+extern void PortUwp_Trace(const char *message);
+#define MT_TRACE(message) PortUwp_Trace(message)
+#else
+#define MT_TRACE(message) ((void)0)
+#endif
 #define STBTT_assert(x) ((void)0) /* never stops the game over a font; face_open has checked what it relies on */
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -402,7 +409,12 @@ static void menu_text_dirs(void) {
     if (fonts != NULL) {
         snprintf(sFontDir, sizeof(sFontDir), "%s", fonts);
     } else {
+#ifdef BT3_UWP
+        const char *base = SDL_GetBasePath();
+        snprintf(sFontDir, sizeof(sFontDir), "%sfonts", base != NULL ? base : "");
+#else
         snprintf(sFontDir, sizeof(sFontDir), "%s", file_there("fonts/fonts.tsv") ? "fonts" : "port/third_party/fonts");
+#endif
     }
     if (labels != NULL) {
         snprintf(sLabelDir, sizeof(sLabelDir), "%s", labels);
@@ -410,7 +422,9 @@ static void menu_text_dirs(void) {
         snprintf(sLabelDir, sizeof(sLabelDir), "%s/game-text", data != NULL ? data : "gamedata");
     }
     snprintf(sDataDir, sizeof(sDataDir), "%s", data != NULL ? data : "gamedata");
+    MT_TRACE("Menu text: checking label folder");
     state = sLabelDir[0] != '\0' ? labels_state() : 0;
+    MT_TRACE("Menu text: label folder checked");
     sLabelsThere = state == 1;
     sLabelsOld = state == 2;
 }
@@ -476,12 +490,17 @@ static void menu_text_fonts(void) {
     int i, menu = 0;
     if (sFontsLoaded) { return; }
     sFontsLoaded = 1;
+    MT_TRACE("Menu text: finding font files");
     menu_text_dirs();
+    MT_TRACE("Menu text: reading font list");
     fonts_read();
+    MT_TRACE("Menu text: font list read");
     for (i = 0; i < sFontCount; i++) { menu |= sFonts[i].usage & 1; }
     if (!sLabelsThere && sLabelDir[0] != '\0') {
         if (menu) {
+            MT_TRACE("Menu text: starting label generator");
             labels_start(); /* (without a font for the menus there is nothing to make it for) */
+            MT_TRACE("Menu text: label generator started");
         } else {
             sLabelsThere = sLabelsOld;
         }
@@ -765,8 +784,11 @@ void MenuText_SetFont(int choice) {
 /* (The settings window sets "Original" while the list is awaited, having nothing else to offer: that does not
    take back what the settings file asked for.) */
 void MenuText_SetFontId(int id) {
+    MT_TRACE("Menu text: locking menu font");
     pthread_mutex_lock(&sLock);
+    MT_TRACE("Menu text: resolving menu font");
     set_font(font_by_id(id));
+    MT_TRACE("Menu text: menu font resolved");
     sWantedId = sMake != 0 && sFontChoice == 0 ? id : 0;
     pthread_mutex_unlock(&sLock);
 }
@@ -1364,8 +1386,11 @@ void MenuText_SetSharedFont(int choice) {
 }
 
 void MenuText_SetSharedFontId(int id) {
+    MT_TRACE("Menu text: locking shared font");
     pthread_mutex_lock(&sLock);
+    MT_TRACE("Menu text: resolving shared font");
     set_shared_font(font_by_id(id));
+    MT_TRACE("Menu text: shared font resolved");
     pthread_mutex_unlock(&sLock);
 }
 

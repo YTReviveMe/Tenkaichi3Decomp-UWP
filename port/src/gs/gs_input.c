@@ -413,17 +413,35 @@ static int sIdCount, sInit;
 
 static void pads_refresh(void) {
     static unsigned calls;
+#ifdef BT3_UWP
+    static int reported_count = -1;
+#endif
     SDL_JoystickID *ids;
     int n = 0, i, k;
 
     if (!sInit) {
-        SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+        if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+#ifdef BT3_UWP
+            extern void PortUwp_Trace(const char *message);
+            PortUwp_Trace(SDL_GetError());
+#endif
+            return;
+        }
         sInit = 1;
         test_pad();
     } else if (calls++ % 120 != 0) { /* look for plugged and unplugged controllers about once a second */
         return;
     }
     ids = SDL_GetGamepads(&n);
+#ifdef BT3_UWP
+    if (n != reported_count) {
+        char report[96];
+        extern void PortUwp_Trace(const char *message);
+        snprintf(report, sizeof(report), "Gameplay controllers detected: %d", n);
+        PortUwp_Trace(report);
+        reported_count = n;
+    }
+#endif
     sIdCount = 0;
     for (i = 0; ids != NULL && i < n && sIdCount < MAX_PADS; i++) {
         sIds[sIdCount++] = ids[i];

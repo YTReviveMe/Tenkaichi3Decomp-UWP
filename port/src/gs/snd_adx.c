@@ -25,6 +25,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gs_internal.h"
+#ifdef BT3_UWP
+#include "../../uwp/audio.h"
+extern void PortUwp_Trace(const char *message);
+#endif
 
 enum { ADXT_STAT_STOP = 0, ADXT_STAT_PLAYING = 3, ADXT_STAT_PLAYEND = 5 };
 #define MAX_PLAYERS 16
@@ -160,6 +164,19 @@ static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] << 8 | p[1]; }
 
 static int device(void) {
+#ifdef BT3_UWP
+    static int waited;
+    if (GsGpu_Enabled() && getenv("BT3_NOSOUND") == NULL) PortUwp_AudioStart();
+    if (!waited && PortUwp_AudioStatus() == 1) {
+        int i;
+        waited = 1;
+        for (i = 0; i < 30 && PortUwp_AudioStatus() == 1; i++) SDL_Delay(100);
+        if (PortUwp_AudioStatus() == 1)
+            PortUwp_Trace("UWP audio: device still opening; continuing game without blocking");
+    }
+    sDevice = PortUwp_AudioDevice();
+    return sDevice != 0;
+#else
     /* not before the renderer has decided whether there is a window (its first frame) */
     if (!sTried && (GsGpu_Enabled() || getenv("BT3_SOUND") != NULL || gGsFrame > 2)) {
         sTried = 1;
@@ -176,6 +193,7 @@ static int device(void) {
         }
     }
     return sDevice != 0;
+#endif
 }
 
 /* What the port's other sound code mixes into: the opened device, or 0. */

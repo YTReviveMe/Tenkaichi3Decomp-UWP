@@ -3,6 +3,12 @@
 #include "sys/heap.h"
 #include "sys/file.h"
 #include "sys/dma.h"
+#ifdef BT3_UWP
+extern void PortUwp_Trace(const char *message);
+#define BT3_TRACE(message) PortUwp_Trace(message)
+#else
+#define BT3_TRACE(message) ((void)0)
+#endif
 
 /* Sony kernel / libkernl */
 extern s32 GetThreadId(void);
@@ -129,12 +135,18 @@ void Sys_LoadIopModules(void) {
 
 /* Initialises every subsystem in order, then alternates forever between the menu overlay and a battle. */
 void Game_Main(void) {
+    BT3_TRACE("Game_Main: reboot IOP");
     Sys_RebootIop();
+    BT3_TRACE("Game_Main: load IOP modules");
     Sys_LoadIopModules();
+    BT3_TRACE("Game_Main: initialize heap");
     ChangeThreadPriority(GetThreadId(), 2);
     Heap_Init();
+    BT3_TRACE("Game_Main: initialize graphics");
     Gfx_Init();
+    BT3_TRACE("Game_Main: initialize sound");
     Snd_Init();
+    BT3_TRACE("Game_Main: initialize files");
     File_Init();
     Movie_Init();
     Common_Init();

@@ -15,6 +15,9 @@
 #include <time.h>
 #include <time.h>
 #include "port_addr.h"
+#ifdef BT3_UWP
+#undef small
+#endif
 extern void Port_StateTouch(void *p, unsigned long n); /* gs/state.c */
 
 /* ---- second processor (IOP): heap and remote calls ---- */

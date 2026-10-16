@@ -89,7 +89,12 @@ static void set_state(int state, const char *error) {
 /* (http_post_native: `json` NULL makes it a GET of `url`, for the update check further down. `headers`: lines
    "Name: value" to send as well, ended by a NULL, or NULL for none.) */
 
-#ifdef _WIN32
+#if defined(BT3_UWP)
+#include "../../uwp/http.h"
+static int http_post_native(const char *url, const char *json, const char *const *headers, char *out, size_t size) {
+    return PortUwp_HttpRequest(url, json, headers, out, size);
+}
+#elif defined(_WIN32)
 /* Windows: its own HTTPS (WinHTTP), so nothing has to be installed and no other program is started. */
 #include <winhttp.h>
 
@@ -243,11 +248,16 @@ static void clock_learn(const char *answer) {
    that is not to be had, the `curl` program. */
 static int http_post_once(const char *what, const char *json, char *out, size_t size) {
     char url[256], path[64], sig[65], head[3][96];
+#ifndef BT3_UWP
     const char *args[20], *headers[4] = {NULL, NULL, NULL, NULL};
     SDL_Process *p;
     size_t got = 0;
     int code = 0, n = 0, i;
     void *data;
+#else
+    const char *headers[4] = {NULL, NULL, NULL, NULL};
+    int i;
+#endif
     long long when = (long long)time(NULL) + SDL_GetAtomicInt(&sClockAhead);
 
     SDL_snprintf(url, sizeof(url), "%s/v1/%s", match_url(), what);
@@ -263,6 +273,9 @@ static int http_post_once(const char *what, const char *json, char *out, size_t 
     if (SDL_getenv("BT3_MATCH_CURL") == NULL && http_post_native(url, json, headers[0] != NULL ? headers : NULL, out, size)) {
         return 1;
     }
+#ifdef BT3_UWP
+    return 0;
+#else
 #ifdef _WIN32
     args[n++] = "curl.exe";
 #else
@@ -293,6 +306,7 @@ static int http_post_once(const char *what, const char *json, char *out, size_t 
     SDL_strlcpy(out, (const char *)data, size);
     SDL_free(data);
     return got > 0;
+#endif
 }
 
 static int http_post(const char *what, const char *json, char *out, size_t size) {
@@ -790,6 +804,7 @@ static int SDLCALL update_thread(void *arg) {
 
     (void)arg;
     ok = SDL_getenv("BT3_MATCH_CURL") == NULL && http_post_native(url, NULL, NULL, answer, sizeof(answer));
+#ifndef BT3_UWP
     if (!ok) { /* the `curl` program, as for the service */
 #ifdef _WIN32
         const char *args[] = {"curl.exe", "-s", "-L", "-m", "12", "-A", "Tenkaichi3Decomp", url, NULL};
@@ -809,6 +824,7 @@ static int SDLCALL update_thread(void *arg) {
             ok = got > 0;
         }
     }
+#endif
     if (ok && (p = SDL_strstr(answer, "\"tag_name\"")) != NULL && (p = SDL_strchr(p + 10, 'v')) != NULL) {
         int a = 0, b = 0, c = 0;
         if (SDL_sscanf(p, "v%d.%d.%d", &a, &b, &c) == 3 && a == 0 && b >= 0 && c >= 0 && c < 100) {

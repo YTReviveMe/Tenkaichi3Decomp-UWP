@@ -38,8 +38,13 @@ extern void *Port_LowAlloc(size_t size); /* plat_mem.c */
 extern void Port_LowFree(void *addr);
 
 static const char *root(void) {
+#ifdef BT3_UWP
+    extern const char *PortUwp_DataPath(void);
+    return PortUwp_DataPath();
+#else
     const char *r = getenv("BT3_DATA");
     return r != NULL ? r : "gamedata";
+#endif
 }
 const char *Port_FileRoot(void) { return root(); }
 
@@ -240,3 +245,23 @@ void ADXERR_EntryErrFunc(void (*func)(void *obj, char *msg), void *obj) { (void)
 /* The drive: a PS2 DVD is always present and idle (sceCdGetDiskTypeSafe 0x14 = PS2 DVD, sceCdStatus 10 = paused). */
 int sceCdGetDiskTypeSafe(void) { return 0x14; }
 int sceCdStatus(void) { return 10; }
+#ifdef BT3_UWP
+int sceCdSearchFile(void *file, char *name) {
+    const char *base = name, *p;
+    char path[1024], leaf[128];
+    size_t n = 0;
+    FILE *stream;
+    for (p = name; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    while (base[n] && base[n] != ';' && n + 1 < sizeof(leaf)) {
+        leaf[n] = (char)toupper((unsigned char)base[n]);
+        n++;
+    }
+    leaf[n] = 0;
+    snprintf(path, sizeof(path), "%s/disc/%s", root(), leaf);
+    stream = fopen(path, "rb");
+    if (!stream) return 0;
+    fclose(stream);
+    if (file) memset(file, 0, 0x24);
+    return 1;
+}
+#endif

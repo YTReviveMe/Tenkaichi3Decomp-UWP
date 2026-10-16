@@ -63,15 +63,29 @@ static int request(int cmd, int result) {
 
 /* The host path of a card path; creates the card's folder on first use. Returns 0 for slot 2 (no card). */
 static int host_path(int port, const char *name, char *out, size_t size) {
+#ifdef BT3_UWP
+    extern const char *PortUwp_SavePath(void);
+    extern int PortUwp_EnsureDirectory(const char *path);
+    const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : PortUwp_SavePath();
+#else
     const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : "saves";
+#endif
     char dir[512];
 
     if (port != 0) {
         return 0;
     }
+#ifdef BT3_UWP
+    PortUwp_EnsureDirectory(root);
+#else
     mkdir(root, 0755);
+#endif
     snprintf(dir, sizeof(dir), "%s/card1", root);
+#ifdef BT3_UWP
+    PortUwp_EnsureDirectory(dir);
+#else
     mkdir(dir, 0755);
+#endif
     while (*name == '/') {
         name++;
     }

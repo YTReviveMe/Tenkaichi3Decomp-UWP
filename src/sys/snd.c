@@ -72,6 +72,12 @@
 #include "sys/file.h"
 #include "sys/heap.h"
 #include "sys/save.h"
+#ifdef BT3_UWP
+extern void PortUwp_Trace(const char *message);
+#define SND_TRACE(message) PortUwp_Trace(message)
+#else
+#define SND_TRACE(message) ((void)0)
+#endif
 
 extern void *memset(void *dst, s32 value, u32 size);
 extern void FlushCache(s32 mode);
@@ -111,9 +117,11 @@ s32 Snd_RpcIsBusy(void) {
 void Snd_RpcInit(void) {
     s32 i;
 
+    SND_TRACE("Snd_RpcInit: allocate");
     gSndRpc = Heap_Alloc(sizeof(SndRpc), 0x20, 0, 2);
     memset(gSndRpc, 0, sizeof(SndRpc));
     sceSifInitRpc(0);
+    SND_TRACE("Snd_RpcInit: bind");
     while (1) {
         sceSifBindRpc(&gSndRpc->client, SND_RPC_ID, 0);
         if (gSndRpc->client.serve != NULL) {
@@ -123,7 +131,9 @@ void Snd_RpcInit(void) {
         while (i--) {
         }
     }
+    SND_TRACE("Snd_RpcInit: call init");
     Snd_RpcCall(SND_RPC_INIT, &gSndRpcBuf, 4);
+    SND_TRACE("Snd_RpcInit: done");
 }
 
 /* RPC 1: shuts the driver down. */
@@ -425,14 +435,20 @@ void Snd_SendBank(SndBank *bank, s32 sync) {
 
 /* Allocates the manager and the IOP staging buffer, starts libsdr and the RPC link, sets full volume. */
 void Snd_Init(void) {
+    SND_TRACE("Snd_Init: allocate manager");
     gSndMgr = Heap_Alloc(sizeof(SndMgr), 0x20, 0, 2);
     memset(gSndMgr, 0, sizeof(SndMgr));
+    SND_TRACE("Snd_Init: allocate IOP buffer");
     gSndMgr->iopBuf = IopHeap_Alloc(0xA4800);
+    SND_TRACE("Snd_Init: SPU heap");
     SpuHeap_Init();
+    SND_TRACE("Snd_Init: remote");
     sceSdRemoteInit();
     func_00296B48(5);
     Snd_RpcInit();
+    SND_TRACE("Snd_Init: master volume");
     Snd_SetMasterVolume(0x7F);
+    SND_TRACE("Snd_Init: done");
 }
 
 /* Shuts the driver down and frees everything. No callers. (The loop unloads only empty slots, i.e. nothing.) */

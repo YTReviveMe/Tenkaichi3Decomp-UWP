@@ -1,0 +1,251 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9998abe..83b2207 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3610,7 +3610,7 @@ endif()
+ 
+ sdl_glob_sources(${SDL3_SOURCE_DIR}/src/tray/*.c)
+ 
+-if(SDL_GPU AND NOT WINDOWS_STORE)
++if(SDL_GPU)
+   if(HAVE_D3D11_H)
+     sdl_glob_sources("${SDL3_SOURCE_DIR}/src/gpu/d3d11/*.c")
+     set(SDL_GPU_D3D11 1)
+diff --git a/src/audio/wasapi/SDL_wasapi.c b/src/audio/wasapi/SDL_wasapi.c
+index 122fc8f..53e1f89 100644
+--- a/src/audio/wasapi/SDL_wasapi.c
++++ b/src/audio/wasapi/SDL_wasapi.c
+@@ -94,6 +94,9 @@ typedef struct ManagementThreadPendingTask
+ } ManagementThreadPendingTask;
+ 
+ static SDL_Thread *ManagementThread = NULL;
++/* SDL_GetThreadID(ManagementThread) can be zero on UWP even after the thread
++   starts. Record the ID on that thread so nested management tasks run inline. */
++static SDL_AtomicInt ManagementThreadID;
+ static ManagementThreadPendingTask *ManagementThreadPendingTasks = NULL;
+ static SDL_Mutex *ManagementThreadLock = NULL;
+ static SDL_Condition *ManagementThreadCondition = NULL;
+@@ -125,7 +128,7 @@ static void ManagementThreadMainloop(void)
+ bool WASAPI_ProxyToManagementThread(ManagementThreadTask task, void *userdata, bool *wait_on_result)
+ {
+     // We want to block for a result, but we are already running from the management thread! Just run the task now so we don't deadlock.
+-    if ((wait_on_result) && (SDL_GetCurrentThreadID() == SDL_GetThreadID(ManagementThread))) {
++    if ((wait_on_result) && ((Uint32)SDL_GetCurrentThreadID() == (Uint32)SDL_GetAtomicInt(&ManagementThreadID))) {
+         *wait_on_result = task(userdata);
+         return true;  // completed!
+     }
+@@ -261,10 +264,12 @@ typedef struct
+ static int ManagementThreadEntry(void *userdata)
+ {
+     ManagementThreadEntryData *data = (ManagementThreadEntryData *)userdata;
++    SDL_SetAtomicInt(&ManagementThreadID, (int)SDL_GetCurrentThreadID());
+ 
+     if (!ManagementThreadPrepare()) {
+         data->errorstr = SDL_strdup(SDL_GetError());
+         SDL_SignalSemaphore(data->ready_sem); // unblock calling thread.
++        SDL_SetAtomicInt(&ManagementThreadID, 0);
+         return 0;
+     }
+ 
+@@ -272,6 +277,7 @@ static int ManagementThreadEntry(void *userdata)
+     ManagementThreadMainloop();
+ 
+     WASAPI_PlatformDeinit();
++    SDL_SetAtomicInt(&ManagementThreadID, 0);
+     return 0;
+ }
+ 
+diff --git a/src/gpu/d3d12/SDL_gpu_d3d12.c b/src/gpu/d3d12/SDL_gpu_d3d12.c
+index b2d57e5..c30474e 100644
+--- a/src/gpu/d3d12/SDL_gpu_d3d12.c
++++ b/src/gpu/d3d12/SDL_gpu_d3d12.c
+@@ -91,6 +91,10 @@
+ #define D3D12_DLL "d3d12_x.dll"
+ #else
+ #define D3D12_DLL "d3d12.dll"
++#ifdef SDL_PLATFORM_WINRT
++#pragma comment(lib, "d3d12.lib")
++#pragma comment(lib, "dxgi.lib")
++#endif
+ #define USE_PIX_RUNTIME
+ #define WINPIXEVENTRUNTIME_DLL "WinPixEventRuntime.dll"
+ #endif
+@@ -7036,6 +7040,21 @@ static bool D3D12_INTERNAL_CreateSwapchain(
+ #endif
+ 
+     // Create the swapchain!
++#ifdef SDL_PLATFORM_WINRT
++    {
++        int width = 0, height = 0;
++        IUnknown *coreWindow = (IUnknown *)SDL_GetPointerProperty(
++            SDL_GetWindowProperties(windowData->window), SDL_PROP_WINDOW_WINRT_WINDOW_POINTER, NULL);
++        SDL_GetWindowSizeInPixels(windowData->window, &width, &height);
++        swapchainDesc.Width = width;
++        swapchainDesc.Height = height;
++        swapchainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
++        swapchainDesc.Flags = 0;
++        res = IDXGIFactory4_CreateSwapChainForCoreWindow(
++            renderer->factory, (IUnknown *)renderer->commandQueue, coreWindow,
++            &swapchainDesc, NULL, &swapchain);
++    }
++#else
+     res = IDXGIFactory4_CreateSwapChainForHwnd(
+         renderer->factory,
+         (IUnknown *)renderer->commandQueue,
+@@ -7044,6 +7063,7 @@ static bool D3D12_INTERNAL_CreateSwapchain(
+         &fullscreenDesc,
+         NULL,
+         &swapchain);
++#endif
+     CHECK_D3D12_ERROR_AND_RETURN("Could not create swapchain", false);
+ 
+     res = IDXGISwapChain1_QueryInterface(
+@@ -7067,6 +7087,7 @@ static bool D3D12_INTERNAL_CreateSwapchain(
+      * will silently fail and doesn't even verify arguments or return errors.
+      * See https://gamedev.net/forums/topic/634235-dxgidisabling-altenter/4999955/
+      */
++    #ifndef SDL_PLATFORM_WINRT
+     res = IDXGISwapChain3_GetParent(
+         swapchain3,
+         D3D_GUID(D3D_IID_IDXGIFactory1),
+@@ -7092,8 +7113,9 @@ static bool D3D12_INTERNAL_CreateSwapchain(
+         // We're done with the parent now
+         IDXGIFactory1_Release(pParent);
+     }
++    #endif
+ 
+-    IDXGISwapChain3_GetDesc1(swapchain3, &swapchainDesc);
++    res = IDXGISwapChain3_GetDesc1(swapchain3, &swapchainDesc);
+     CHECK_D3D12_ERROR_AND_RETURN("Failed to retrieve swapchain descriptor!", false);
+ 
+     // Initialize the swapchain data
+@@ -8537,6 +8559,10 @@ static bool D3D12_PrepareDriver(SDL_VideoDevice *_this, SDL_PropertiesID props)
+ 
+     // Can we load D3D12?
+ 
++    #ifdef SDL_PLATFORM_WINRT
++    d3d12Dll = NULL;
++    pD3D12CreateDevice = D3D12CreateDevice;
++    #else
+     d3d12Dll = SDL_LoadObject(D3D12_DLL);
+     if (d3d12Dll == NULL) {
+         SDL_LogWarn(SDL_LOG_CATEGORY_GPU, "D3D12: Could not find " D3D12_DLL);
+@@ -8551,9 +8577,14 @@ static bool D3D12_PrepareDriver(SDL_VideoDevice *_this, SDL_PropertiesID props)
+         SDL_UnloadObject(d3d12Dll);
+         return false;
+     }
++    #endif
+ 
+     // Can we load DXGI?
+ 
++    #ifdef SDL_PLATFORM_WINRT
++    dxgiDll = NULL;
++    pCreateDXGIFactory1 = CreateDXGIFactory1;
++    #else
+     dxgiDll = SDL_LoadObject(DXGI_DLL);
+     if (dxgiDll == NULL) {
+         SDL_LogWarn(SDL_LOG_CATEGORY_GPU, "D3D12: Could not find " DXGI_DLL);
+@@ -8568,6 +8599,7 @@ static bool D3D12_PrepareDriver(SDL_VideoDevice *_this, SDL_PropertiesID props)
+         SDL_UnloadObject(dxgiDll);
+         return false;
+     }
++    #endif
+ 
+     // Can we create a device?
+ 
+@@ -8946,11 +8978,13 @@ static SDL_GPUDevice *D3D12_CreateDevice(bool debugMode, bool preferLowPower, SD
+     bool hasDxgiDebug = false;
+ #if !(defined(SDL_PLATFORM_XBOXONE) || defined(SDL_PLATFORM_XBOXSERIES))
+     // Load the DXGI library
++    #ifndef SDL_PLATFORM_WINRT
+     renderer->dxgi_dll = SDL_LoadObject(DXGI_DLL);
+     if (renderer->dxgi_dll == NULL) {
+         D3D12_INTERNAL_DestroyRenderer(renderer);
+         SET_STRING_ERROR_AND_RETURN("Could not find " DXGI_DLL, NULL);
+     }
++    #endif
+ 
+ #ifdef HAVE_IDXGIINFOQUEUE
+     // Initialize the DXGI debug layer, if applicable
+@@ -8988,9 +9022,13 @@ static SDL_GPUDevice *D3D12_CreateDevice(bool debugMode, bool preferLowPower, SD
+ #endif
+ 
+     // Load the CreateDXGIFactory1 function
++    #ifdef SDL_PLATFORM_WINRT
++    pCreateDXGIFactory1 = CreateDXGIFactory1;
++    #else
+     pCreateDXGIFactory1 = (pfnCreateDXGIFactory1)SDL_LoadFunction(
+         renderer->dxgi_dll,
+         CREATE_DXGI_FACTORY1_FUNC);
++    #endif
+     if (pCreateDXGIFactory1 == NULL) {
+         D3D12_INTERNAL_DestroyRenderer(renderer);
+         SET_STRING_ERROR_AND_RETURN("Could not load function: " CREATE_DXGI_FACTORY1_FUNC, NULL);
+@@ -9106,11 +9144,13 @@ static SDL_GPUDevice *D3D12_CreateDevice(bool debugMode, bool preferLowPower, SD
+ #endif
+ 
+     // Load the D3D library
++    #ifndef SDL_PLATFORM_WINRT
+     renderer->d3d12_dll = SDL_LoadObject(D3D12_DLL);
+     if (renderer->d3d12_dll == NULL) {
+         D3D12_INTERNAL_DestroyRenderer(renderer);
+         SET_STRING_ERROR_AND_RETURN("Could not find " D3D12_DLL, NULL);
+     }
++    #endif
+ 
+     // Load the CreateDevice function
+ #if (defined(SDL_PLATFORM_XBOXONE) || defined(SDL_PLATFORM_XBOXSERIES))
+@@ -9122,18 +9162,26 @@ static SDL_GPUDevice *D3D12_CreateDevice(bool debugMode, bool preferLowPower, SD
+         SET_STRING_ERROR_AND_RETURN("Could not load function: D3D12XboxCreateDevice", NULL);
+     }
+ #else
++    #ifdef SDL_PLATFORM_WINRT
++    pD3D12CreateDevice = D3D12CreateDevice;
++    #else
+     pD3D12CreateDevice = (PFN_D3D12_CREATE_DEVICE)SDL_LoadFunction(
+         renderer->d3d12_dll,
+         D3D12_CREATE_DEVICE_FUNC);
++    #endif
+     if (pD3D12CreateDevice == NULL) {
+         D3D12_INTERNAL_DestroyRenderer(renderer);
+         SET_STRING_ERROR_AND_RETURN("Could not load function: " D3D12_CREATE_DEVICE_FUNC, NULL);
+     }
+ #endif
+ 
++    #ifdef SDL_PLATFORM_WINRT
++    renderer->pD3D12SerializeRootSignature = D3D12SerializeRootSignature;
++    #else
+     renderer->pD3D12SerializeRootSignature = (PFN_D3D12_SERIALIZE_ROOT_SIGNATURE)SDL_LoadFunction(
+         renderer->d3d12_dll,
+         D3D12_SERIALIZE_ROOT_SIGNATURE_FUNC);
++    #endif
+     if (renderer->pD3D12SerializeRootSignature == NULL) {
+         D3D12_INTERNAL_DestroyRenderer(renderer);
+         SET_STRING_ERROR_AND_RETURN("Could not load function: " D3D12_SERIALIZE_ROOT_SIGNATURE_FUNC, NULL);
+@@ -9155,7 +9203,7 @@ static SDL_GPUDevice *D3D12_CreateDevice(bool debugMode, bool preferLowPower, SD
+             SDL_LogWarn(SDL_LOG_CATEGORY_GPU, "Could not load D3D12GetInterface, custom D3D12 SDK will not load.");
+         } else if (SUCCEEDED(pD3D12GetInterface(D3D_GUID(D3D_CLSID_ID3D12SDKConfiguration), D3D_GUID(D3D_IID_ID3D12SDKConfiguration), (void**) &sdk_config))) {
+             ID3D12SDKConfiguration1 *sdk_config1 = NULL;
+-            if (SUCCEEDED(IUnknown_QueryInterface(sdk_config, &D3D_IID_ID3D12SDKConfiguration1, (void**) &sdk_config1))) {
++            if (SUCCEEDED(sdk_config->lpVtbl->QueryInterface(sdk_config, &D3D_IID_ID3D12SDKConfiguration1, (void**) &sdk_config1))) {
+                 if (SUCCEEDED(ID3D12SDKConfiguration1_CreateDeviceFactory(sdk_config1, d3d12SDKVersion, d3d12SDKPath, &D3D_IID_ID3D12DeviceFactory, (void**) &factory))) {
+                     SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Loaded vendored D3D12Core.dll");
+                 } else {
+diff --git a/src/video/winrt/SDL_winrtkeyboard.cpp b/src/video/winrt/SDL_winrtkeyboard.cpp
+index 9b86020..1c6098c 100644
+--- a/src/video/winrt/SDL_winrtkeyboard.cpp
++++ b/src/video/winrt/SDL_winrtkeyboard.cpp
+@@ -69,11 +69,11 @@ void WINRT_ProcessAcceleratorKeyActivated(Windows::UI::Core::AcceleratorKeyEvent
+     switch (args->EventType) {
+     case CoreAcceleratorKeyEventType::SystemKeyDown:
+     case CoreAcceleratorKeyEventType::KeyDown:
+-        state = 0;
++        state = 1;
+         break;
+     case CoreAcceleratorKeyEventType::SystemKeyUp:
+     case CoreAcceleratorKeyEventType::KeyUp:
+-        state = 1;
++        state = 0;
+         break;
+     default:
+         return;

@@ -29,6 +29,9 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef BT3_UWP
+#undef small
+#endif
 #define XXH_INLINE_ALL
 #include "../../third_party/xxhash/xxhash.h"
 #include "gs_internal.h"
@@ -50,6 +53,9 @@ static void regions_init(void) {
     FILE *fp;
 #ifdef _WIN32
     long n = (long)GetModuleFileNameA(NULL, exe, sizeof(exe) - 1);
+#ifdef BT3_UWP
+    uintptr_t imageBase = (uintptr_t)GetModuleHandleW(NULL);
+#endif
 #elif defined(__APPLE__)
     uint32_t cap = sizeof(exe) - 1;
     long n = _NSGetExecutablePath(exe, &cap) == 0 ? (long)strlen(exe) : -1;
@@ -76,6 +82,8 @@ static void regions_init(void) {
                 if (a < 2) {
 #ifdef __APPLE__ /* (the list holds game addresses: offsets in the window, port_addr.h) */
                     marks += size == Port_Addr(a == 0 ? (const void *)&gPortResim : (const void *)&gPortVBlanks);
+#elif defined(BT3_UWP)
+                    marks += imageBase + (uintptr_t)size == (a == 0 ? (uintptr_t)&gPortResim : (uintptr_t)&gPortVBlanks);
 #else
                     marks += (uintptr_t)size == (a == 0 ? (uintptr_t)&gPortResim : (uintptr_t)&gPortVBlanks);
 #endif
@@ -83,6 +91,8 @@ static void regions_init(void) {
                 }
 #ifdef __APPLE__
                 sRegion[sRegions].p = (const uint8_t *)Port_Ptr((uint32_t)a);
+#elif defined(BT3_UWP)
+                sRegion[sRegions].p = (const uint8_t *)(imageBase + (uintptr_t)a);
 #else
                 sRegion[sRegions].p = (const uint8_t *)(uintptr_t)a;
 #endif
@@ -110,6 +120,10 @@ static void regions_init(void) {
     sRegion[sRegions].n = 0x4000;
     sRegion[sRegions].what = "scratchpad";
     sRegions++;
+#ifdef BT3_UWP
+    fprintf(stderr, "bt3: state: %d regions loaded; Xbox online %s\n", sRegions,
+            sListed ? "ready" : "unavailable (state map missing or mismatched)");
+#endif
 }
 
 uint64_t Port_StateHash(void) {
