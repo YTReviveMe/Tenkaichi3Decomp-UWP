@@ -35,11 +35,12 @@ In the game, F1 opens the settings: resolution, widescreen, controls and sound.
 Saves are kept in saves/. A file placed in gamedata/mods/<same path as the original> replaces the original.
 Texture packs (PCSX2 naming, .dds or .png) go into textures/, stages and music from outside the disc into
 stages/ and songs/: see the note in each folder.
-F1 > UI has two font settings, both "Original" unless you choose: "Menu font" draws the menus' labels and
-"Dialogue / UI font" the game's text from a font in fonts/ instead of the game's own lettering (the fonts and their
-licences are in that folder; fonts.tsv there is the list, to which a .ttf of your own can be added). For the menus
-the game makes a list of their labels from your disc data the first time it starts (gamedata/game-text/, a moment
-in the background): the fonts appear under "Menu font" when it is done.
+F1 > UI has three font settings, all starting on "Original": "Menu font" draws menu labels, "Battle font" draws
+announcements and HUD text, and "Dialogue / UI font" draws the game's ordinary text. Their fonts and licences are
+in fonts/. To add a .ttf, put it there and list it in fonts.tsv. The third column says where it can be used:
+1 = Menu, 2 = Dialogue / UI, 4 = Battle, added up for several (3 = Menu and Dialogue / UI, 7 = all three).
+The game makes the menu and battle label list from your disc data on its first start (gamedata/game-text/, in the
+background). Menu and Battle font choices appear when the list is ready.
 
 Screen reader: with Prism's library (prism.dll, libprism.so; release 0.18.3) placed next to the program, the menus
 and the fight's gauges are spoken and shown in braille. a11y_es.txt is its Spanish; another language is a file

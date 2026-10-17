@@ -241,7 +241,7 @@ static SDL_GPUTexture *load_strip(const char *env, const char *rel, uint32_t *w,
 // replaces it by putting a trim.png and / or a fill.png of any size into a folder "bars" next to the game.
 #include "bars_png.h"
 static SDL_GPUTexture *sBarTrim, *sBarFill;
-static int sBars = -1; // 0 black, 1 the border; -1 not read yet
+static int sBars = -1; // 0 black, 1 the border, 2 the border with the fight panels; -1 not read yet
 static int sBarsTried;
 static int sChatSize = -1; // 0 = compact, 1 = normal, 2 = large; -1 = not read yet
 
@@ -279,9 +279,93 @@ static SDL_GPUTexture *bar_texture(const char *file, const unsigned char *png, s
 
 static bool bars_on(void) {
     if (sBars < 0) {
-        sBars = Port_Setting("side_bars", 0) != 0;
+        sBars = Port_Setting("side_bars", 0);
+        sBars = sBars < 0 ? 0 : sBars > 2 ? 2 : sBars;
     }
     return sBars != 0 && gUiPresentX > 0 && gUiPresentW > 0 && gUiPresentH > 0;
+}
+
+// For the fight panels (fight_panels_ui.cpp): textures of their own and the display faces.
+static ImFont *sFontBold;
+SDL_GPUTexture *Ui_Texture(uint8_t *pix, uint32_t w, uint32_t h) {
+    return make_strip(pix, (size_t)w * h * 4, w, h, 1);
+}
+void Ui_TextureFree(SDL_GPUTexture *tex) {
+    if (tex == NULL) {
+        return;
+    }
+    if (sGL) {
+        GsGl_StripTextureFree((unsigned)(intptr_t)tex);
+    } else {
+        SDL_ReleaseGPUTexture(sDevice, tex);
+    }
+}
+ImFont *Ui_FontBold(void) { return sFontBold; }
+bool FightPanels_Draw(ImDrawList *dl, float lx, float rx, float y0, float y1, float bar, float trim);
+
+// The fight panels' two faces ("Name font", "Form font" in the settings): fonts of the game's own list (fonts.tsv,
+// as the Menu font and the Dialogue / UI font), checked as those are (menu_text.c) and saved by their id; "Default"
+// is the first of the list that can be used. A choice is loaded into the font atlas between two frames (fonts_apply).
+struct PanelFont {
+    const char *setting;
+    ImFont *font;
+    int choice;  // in use (0: Default)
+    int pending; // chosen, loaded before the next frame (-1: nothing)
+};
+static PanelFont sPanelFont[2] = {{"panel_name_font_id", NULL, 0, -1}, {"panel_form_font_id", NULL, 0, -1}};
+ImFont *Ui_FontName(void) { return sPanelFont[0].font; }
+ImFont *Ui_FontForm(void) { return sPanelFont[1].font; }
+
+// A choice of the list as an ImGui font (NULL: none can be used).
+static ImFont *panel_font_load(int choice) {
+    char path[1400];
+    ImGuiIO &io = ImGui::GetIO();
+    for (int i = choice > 0 ? choice : 1; i < MenuText_FontCount(); i++) {
+        if (MenuText_FontFile(i, path, sizeof(path))) {
+            return io.Fonts->AddFontFromFileTTF(path, 48.0f);
+        }
+        if (choice > 0) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+static void fonts_apply(void) {
+    for (PanelFont &pf : sPanelFont) {
+        if (pf.pending < 0) {
+            continue;
+        }
+        ImFont *f = panel_font_load(pf.pending);
+        if (f != NULL) {
+            if (pf.font != NULL) {
+                ImGui::GetIO().Fonts->RemoveFont(pf.font);
+            }
+            pf.font = f;
+            pf.choice = pf.pending;
+            Port_SettingSave(pf.setting, MenuText_FontId(pf.choice));
+            Port_SettingsWrite();
+        }
+        pf.pending = -1;
+    }
+}
+
+// A combo of the game's fonts; the choice is loaded before the next frame.
+static void font_picker(const char *label, PanelFont &pf, const char *tip) {
+    if (ImGui::BeginCombo(label, pf.choice > 0 ? MenuText_FontName(pf.choice) : "Default")) {
+        if (ImGui::Selectable("Default", pf.choice == 0)) {
+            pf.pending = 0;
+        }
+        for (int i = 1; i < MenuText_FontCount(); i++) {
+            ImGui::PushID(i);
+            if (ImGui::Selectable(MenuText_FontName(i), pf.choice == i)) {
+                pf.pending = i;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("%s", tip);
 }
 
 static void bars_draw(void) {
@@ -307,6 +391,19 @@ static void bars_draw(void) {
     if (bar > trim) {
         dl->AddImage(ft, ImVec2(lx - bar, y0), ImVec2(lx - trim, y1), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
         dl->AddImage(ft, ImVec2(rx + trim, y0), ImVec2(rx + bar, y1), ImVec2(1.0f, 0.0f), ImVec2(0.0f, 1.0f));
+        // In a fight: each side's fighter over the plain panel, with the border along the picture at half its size
+        // (in proportion, twice down the height) so the fighter has more room (asked for).
+        const int tiles = 2;
+        float thin = trim / tiles;
+        if (sBars == 2 && FightPanels_Draw(dl, lx, rx, y0, y1, bar, thin)) {
+            float th = (y1 - y0) / tiles;
+            for (int i = 0; i < tiles; i++) {
+                float a = y0 + th * i, b = a + th;
+                dl->AddImage(tt, ImVec2(lx - thin, a), ImVec2(lx, b), ImVec2(u0, 0.0f), ImVec2(1.0f, 1.0f));
+                dl->AddImage(tt, ImVec2(rx, a), ImVec2(rx + thin, b), ImVec2(1.0f, 0.0f), ImVec2(u0, 1.0f));
+            }
+            return;
+        }
     }
     dl->AddImage(tt, ImVec2(lx - trim, y0), ImVec2(lx, y1), ImVec2(u0, 0.0f), ImVec2(1.0f, 1.0f));
     dl->AddImage(tt, ImVec2(rx, y0), ImVec2(rx + trim, y1), ImVec2(1.0f, 0.0f), ImVec2(u0, 1.0f));
@@ -387,6 +484,16 @@ int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const c
             fclose(fp);
             io.Fonts->AddFontFromFileTTF(fonts[i], 18.0f);
             break;
+        }
+    }
+    { // the fight panels' faces: the two chosen ones (sPanelFont), and the list's first where one cannot be had
+        if (io.Fonts->Fonts.Size == 0) {
+            io.Fonts->AddFontDefault(); // (the window's font stays the first)
+        }
+        sFontBold = panel_font_load(0);
+        for (PanelFont &pf : sPanelFont) {
+            pf.choice = MenuText_FontChoice(Port_Setting(pf.setting, 0));
+            pf.font = panel_font_load(pf.choice);
         }
     }
     if (device == NULL) { // the OpenGL back end (gs_gl.c), with its context current
@@ -1442,7 +1549,7 @@ static void misc_tab(void) {
 static void ui_tab(PortVideo &v) {
     if (ImGui::BeginCombo("Menu font", MenuText_FontName(v.menuFont))) {
         for (int i = 0; i < MenuText_FontCount(); i++) {
-            if (!MenuText_FontAvailable(i, 0)) { continue; }
+            if (!MenuText_FontAvailable(i, MENU_TEXT_MENU)) { continue; }
             ImGui::PushID(i);
             if (ImGui::Selectable(MenuText_FontName(i), v.menuFont == i)) { v.menuFont = i; }
             if (v.menuFont == i) { ImGui::SetItemDefaultFocus(); }
@@ -1450,10 +1557,21 @@ static void ui_tab(PortVideo &v) {
         }
         ImGui::EndCombo();
     }
-    ImGui::SetItemTooltip("Original uses the game's sprites. Other fonts replace matching menu labels immediately.\nDecorative lettering keeps its original artwork.");
+    ImGui::SetItemTooltip("Original uses the game's sprites. Other fonts replace matching menu labels immediately.\nBattle announcements have their own setting below.");
+    if (ImGui::BeginCombo("Battle font", MenuText_FontName(v.battleFont))) {
+        for (int i = 0; i < MenuText_FontCount(); i++) {
+            if (!MenuText_FontAvailable(i, MENU_TEXT_BATTLE)) { continue; }
+            ImGui::PushID(i);
+            if (ImGui::Selectable(MenuText_FontName(i), v.battleFont == i)) { v.battleFont = i; }
+            if (v.battleFont == i) { ImGui::SetItemDefaultFocus(); }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Choose original battle announcements and HUD text, or any battle font listed in fonts.tsv.");
     if (ImGui::BeginCombo("Dialogue / UI font", MenuText_FontName(v.textFont))) {
         for (int i = 0; i < MenuText_FontCount(); i++) {
-            if (!MenuText_FontAvailable(i, 1)) { continue; }
+            if (!MenuText_FontAvailable(i, MENU_TEXT_DIALOGUE)) { continue; }
             ImGui::PushID(i);
             if (ImGui::Selectable(MenuText_FontName(i), v.textFont == i)) { v.textFont = i; }
             if (v.textFont == i) { ImGui::SetItemDefaultFocus(); }
@@ -1479,17 +1597,24 @@ static void ui_tab(PortVideo &v) {
                               "instead of stretched to the width. Fights keep the wide picture.");
     }
     {
-        static const char *const kBars[] = {"Black", "Border"};
-        int b = sBars > 0;
-        if (ImGui::Combo("Side bars", &b, kBars, 2)) {
+        static const char *const kBars[] = {"Black", "Border", "Fighter panels"};
+        int b = sBars < 0 ? 0 : sBars;
+        if (ImGui::Combo("Side bars", &b, kBars, 3)) {
             sBars = b;
             Port_SettingSave("side_bars", sBars);
             Port_SettingsWrite();
         }
         ImGui::SetItemTooltip("What fills the sides where the picture is narrower than the window:\n"
                               "a 4:3 picture, or the menus with \"Menus in 4:3\", in a wide window.\n"
+                              "Fighter panels: the border, and in a fight each side's fighter with its name and form.\n"
                               "Your own: a folder \"bars\" next to the game with trim.png (the strip along the\n"
                               "picture, kept in proportion) and fill.png (stretched over the rest). Read at start.");
+    }
+    if (sBars == 2) { // the fighter panels' faces
+        font_picker("Name font", sPanelFont[0], "The fighter's name down the panel. The game's fonts, as for the Menu font\n"
+                                                "(a font of your own: add it to fonts/fonts.tsv). Default: the first of the list.");
+        font_picker("Form font", sPanelFont[1], "The form under the portrait. The game's fonts, as for the Menu font.\n"
+                                                "Default: the first of the list.");
     }
 }
 
@@ -2336,6 +2461,7 @@ static bool frame_build(void) {
         ImGui_ImplSDLGPU3_NewFrame();
     }
     ImGui_ImplSDL3_NewFrame();
+    fonts_apply(); // (a face chosen for the fight panels, between two frames)
     ImGui::NewFrame();
     if (bars) {
         bars_draw();

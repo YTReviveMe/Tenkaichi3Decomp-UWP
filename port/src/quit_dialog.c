@@ -97,10 +97,13 @@ static int quit_init(void) {
     return sQuitDialog != NULL ? 1 : -1;
 }
 
-void PortQuit_Draw(void) {
+/* Once per frame of the game (Gfx_EndFrame), which lasts `vsyncs` blanks: one in the menus, two in a fight. The
+   window's animation was made for the menus' frames; in a fight it played at half speed. */
+void PortQuit_Draw(int vsyncs) {
     Dialog *previous;
     int action;
 
+    vsyncs = vsyncs < 1 ? 1 : vsyncs > 4 ? 4 : vsyncs;
     if (sQuitState == 0 || sQuitState == 5) { return; }
     if (sQuitState == 7 || sQuitState == 8) {
         int exitGame = sQuitState == 8;
@@ -121,6 +124,7 @@ void PortQuit_Draw(void) {
         sQuitState = 2;
     }
     quit_select(&previous);
+    gDialog->flash[0].unkC[2] = vsyncs; /* the animation's frames per Flash_Advance (Flash.speed, +0x14) */
     action = sQuitAction;
     if (sQuitState == 2 && (gDialog->flash[0].flags & 2)) {
         sQuitAction = 0;
@@ -143,7 +147,7 @@ void PortQuit_Draw(void) {
     if (sQuitState == 3 && Dialog_IsClosed()) {
         sQuitState = 7;
     }
-    if (sQuitState == 4 && --sQuitFrames <= 0) {
+    if (sQuitState == 4 && (sQuitFrames -= vsyncs) <= 0) {
         Dialog_SetChoices(0);
         Dialog_Start(DIALOG_CMD_CLOSE);
         sQuitState = 6;

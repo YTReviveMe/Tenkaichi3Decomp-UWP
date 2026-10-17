@@ -8,8 +8,7 @@ edit. This tool turns an edited labels.json into labels.tsv and name-styles.tsv 
     python3 port/tools/menu_font.py                      gamedata/game-text of this checkout
     python3 port/tools/menu_font.py --out <folder>       another game-text folder (a release's gamedata/game-text)
 
-For applying edits it reads labels.json and nothing else: not the disc, and no table of its own (which texture has
-which label, the measurements and the colours are all in the file, written there by the game). Standard library only.
+For applying edits it reads labels.json. Standard library only.
 The optional --compare-styles command also reads the disc, and needs Pillow and a C compiler.
 To start over, delete labels.json and labels.tsv: the game writes both again at its next start."""
 import argparse
@@ -23,11 +22,12 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+FONT_MENU, FONT_DIALOGUE, FONT_BATTLE = 1, 2, 3
 
 # The first lines of the two files, matching port/src/gs/menu_labels.c (ml_tsv).
-LABELS_HEAD = ('# BT3 menu text v7: hash width height y row_height cap_height baseline center margin width_milli x row_width '
-               'art_width top bottom outline italic outline_milli outer_milli outer_rgb shadow '
-               'outline_bottom bevel_milli bevel_light bevel_dark text')
+LABELS_HEAD = ('# BT3 menu text v10: hash width height y row_height cap_height baseline center margin width_milli x row_width '
+               'art_width top bottom middle_rgb has_middle outline italic outline_milli outer_milli outer_rgb shadow '
+               'outline_bottom bevel_milli bevel_light bevel_dark depth_milli mid_gradient font_face text')
 STYLES_HEAD = '# kind (0 song, 1 selected song, 2 stage) cap_height baseline margin width_milli top bottom outline'
 
 
@@ -66,15 +66,34 @@ def font_chars(path):
     return chars
 
 
+def font_entries(fonts):
+    """The valid rows of fonts.tsv, in the same order the game numbers them."""
+    entries = []
+    for line in (fonts / 'fonts.tsv').read_text(encoding='utf-8').splitlines():
+        if not line or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) not in (2, 3):
+            continue
+        path, name = fields[0], fields[1].strip()
+        use = fields[2].strip() if len(fields) == 3 else '3'  # (the sum of 1 Menu, 2 Dialogue / UI, 4 Battle)
+        if (not path or len(path) >= 256 or path.startswith('/') or '\\' in path or ':' in path or
+                path == '..' or path.startswith('../') or '/../' in path or
+                not name or len(name) >= 256 or not use.isdigit() or not 1 <= int(use) <= 7):
+            continue
+        bits = int(use)
+        entries.append((path, name, {role for role, bit in ((FONT_MENU, 1), (FONT_DIALOGUE, 2), (FONT_BATTLE, 4)) if bits & bit}))
+    return entries
+
+
 def supported_chars(fonts):
     """The characters some font of the "Menu font" list has (fonts.tsv in the fonts folder). None: no list found."""
     if not (fonts / 'fonts.tsv').is_file():
         return None
     chars = set()
-    for line in (fonts / 'fonts.tsv').read_text(encoding='utf-8').splitlines():
-        fields = line.split('\t')
-        if line and not line.startswith('#') and len(fields) >= 2 and (len(fields) < 3 or (fields[2].strip().isdigit() and int(fields[2]) & 1)):
-            chars.update(font_chars(fonts / fields[0]))
+    for path, _, roles in font_entries(fonts):
+        if FONT_MENU in roles:
+            chars.update(font_chars(fonts / path))
     return chars
 
 
@@ -91,6 +110,10 @@ def apply_labels(out, fonts):
     if not isinstance(palettes, dict) or not isinstance(config.get('labels'), list):
         raise ValueError('labels.json has no "color_styles" or no "labels" (delete it and labels.tsv, '
                          'and the game writes both again at its next start)')
+    required = ('notice-blue/0/0', 'combo-red-digits/0/0', 'timer-white/0/0')
+    present = {row.get('id') for row in config['labels'] if isinstance(row, dict)}
+    if any(row_id not in present for row_id in required):
+        raise ValueError('labels.json is missing battle labels; delete labels.json and labels.tsv, then start the game to regenerate them')
 
     def palette(row):
         name = row.get('color_style')
@@ -110,12 +133,19 @@ def apply_labels(out, fonts):
             else:
                 widths.append(round(value * 1000))
         shadow = colors.get('shadow', True)
-        if type(shadow) != bool:
-            raise ValueError('shadow must be true or false')
-        return [widths[0], widths[1], rgb(colors.get('outer_outline', [0, 0, 0]), 'outer_outline'), int(shadow),
+        if type(shadow) != bool and shadow not in ('hard', 'translucent-hard'):
+            raise ValueError('shadow must be true, false, "hard", or "translucent-hard"')
+        depth = colors.get('depth', 0)
+        midpoint = colors.get('mid_gradient', False)
+        if type(depth) not in (int, float) or not 0 <= depth <= 8:
+            raise ValueError('depth must be from 0 to 8 pixels')
+        if type(midpoint) != bool:
+            raise ValueError('mid_gradient must be true or false')
+        return [widths[0], widths[1], rgb(colors.get('outer_outline', [0, 0, 0]), 'outer_outline'),
+                3 if shadow == 'translucent-hard' else 2 if shadow == 'hard' else int(shadow),
                 rgb(colors.get('outline_bottom', colors['outline']), 'outline_bottom'), widths[2],
                 rgb(colors.get('bevel_light', colors['top']), 'bevel_light'),
-                rgb(colors.get('bevel_dark', colors['outline']), 'bevel_dark')]
+                rgb(colors.get('bevel_dark', colors['outline']), 'bevel_dark'), round(depth * 1000), int(midpoint)]
 
     supported = supported_chars(fonts)
     lines = [LABELS_HEAD]
@@ -140,7 +170,9 @@ def apply_labels(out, fonts):
             raise ValueError(f"{row['id']}: invalid horizontal bounds")
         if not (1 <= row['texture_height'] <= 512 and 1 <= row['height'] <= 64 and
                 0 <= row['y'] <= row['texture_height'] - row['height'] and 1 <= row['cap_height'] <= 64 and
-                0 <= row['baseline'] <= row['height'] and 0 <= row['margin'] < row_width / 2 and row['align'] in ('left', 'center')):
+                0 <= row['baseline'] <= (64 if row.get('text') == '∞' and row['id'].startswith('timer-') and
+                                         row['height'] == 32 and row_width == 64 else row['height']) and
+                0 <= row['margin'] < row_width / 2 and row['align'] in ('left', 'center')):
             raise ValueError(f"{row['id']}: invalid label bounds or style")
         width_scale = row.get('width_scale', 1.0)
         if not isinstance(width_scale, (int, float)) or not 0.5 <= width_scale <= 2.0:
@@ -171,13 +203,19 @@ def apply_labels(out, fonts):
             height = row['height'] // len(parts)
             cap = min(row['cap_height'], height - 8) if len(parts) > 1 else row['cap_height']
             baseline = (height + cap) // 2 if len(parts) > 1 else row['baseline']
+            font_face = row.get('font_face', 'selected')
+            if font_face not in ('selected', 'battle'):
+                raise ValueError(f"{row['id']}: font_face must be selected or battle")
+            middle = colors.get('middle')
+            middle_rgb = rgb(middle, f"color_styles.{row['color_style']}.middle") if middle is not None else '000000'
             fields = [row['hash'], texture_width, row['texture_height'], row['y'] + i * height, height, cap, baseline,
                       int(row['align'] == 'center'), row['margin'], round(width_scale * 1000), x, row_width,
-                      target_width if len(parts) == 1 else 0, *fill, int(italic), *decorations(colors), part]
+                      target_width if len(parts) == 1 else 0, fill[0], fill[1], middle_rgb, int(middle is not None), fill[2],
+                      int(italic), *decorations(colors), int(font_face == 'battle'), part]
             lines.append('\t'.join(map(str, fields)))
             count += 1
-    if count > 512:
-        raise ValueError('The renderer supports at most 512 label rows')
+    if count > 640:
+        raise ValueError('The renderer supports at most 640 label rows')
     # each file whole or not at all; labels.tsv last, as the game writes them
     (out / 'name-styles.tsv.tmp').write_text('\n'.join(styles) + '\n', encoding='utf-8')
     (out / 'name-styles.tsv.tmp').replace(out / 'name-styles.tsv')
@@ -250,7 +288,7 @@ COL4 = ((0,8,32,40,64,72,96,104,2,10,34,42,66,74,98,106,4,12,36,44,68,76,100,108
         (81,89,113,121,17,25,49,57,83,91,115,123,19,27,51,59,85,93,117,125,21,29,53,61,87,95,119,127,23,31,55,63))
 
 
-def texture(data, index):
+def texture(data, index, palette_index=None):
     """Decode indexed menu textures using their actual GS upload format and pitch."""
     e = data[u32(data,4)*4+index*64:][:64]
     if len(e)<64:
@@ -260,7 +298,11 @@ def texture(data, index):
     psm = (tex0>>20)&63
     if w>512 or h>512 or psm not in (19,20) or u32(e,24)>>8 != 0:
         return None
-    pixels,palette = u32(e)*4+96,u32(e,4)*4+96
+    pixels = u32(e)*4+96
+    palette_entry = e if palette_index is None else data[u32(data,4)*4+palette_index*64:][:64]
+    if len(palette_entry) < 64:
+        return None
+    palette = u32(palette_entry,4)*4+96
     reg = struct.unpack_from('<Q',data,pixels-48)[0]
     uw,uh = reg&4095,(reg>>32)&4095
     dbw,tbw = u32(e,24)&63,(tex0>>14)&63
@@ -314,14 +356,8 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
 
     config = json.loads((labels_dir/'labels.json').read_text(encoding='utf-8'))
     rows = {row['id']: row for row in config['labels']}
-    fonts = []
-    for line in (fonts_dir/'fonts.tsv').read_text(encoding='utf-8').splitlines():
-        if line and not line.startswith('#'):
-            fields = line.split('\t')
-            if len(fields) >= 2:
-                usage = int(fields[2]) if len(fields) > 2 else 3
-                fonts.append((fields[0], fields[1], usage))
-    choices = [(index, path, name) for index, (path, name, usage) in enumerate(fonts, 1) if usage & 1]
+    fonts = font_entries(fonts_dir)
+    choices = [(index, path, name) for index, (path, name, roles) in enumerate(fonts, 1) if FONT_MENU in roles]
     if not choices:
         raise ValueError('No Menu font is listed in fonts.tsv')
     if font_arg:
@@ -333,6 +369,10 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
         choice, path, name = choices[0]
 
     archive = (data_root/'pzs3us1'/'00449.bin').read_bytes()
+    hud_archive = (data_root/'pzs3us1'/'00005.bin').read_bytes()
+    timer = section(hud_archive, 1)
+    notice = section(hud_archive, 4)
+    combo = section(hud_archive, 5)
     main = unpack(section(archive, 2))
     title = unpack(section(archive, 1))
     examples = [
@@ -342,22 +382,53 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
         ('orange', 'title-selected/0/0', lambda: texture(section(title, 8), 1)),
         ('title-prompt', 'title-press-start/0/0', lambda: texture(section(title, 6), 0)),
     ]
+    battle = next(((index, path, name) for index, (path, name, roles) in enumerate(fonts, 1) if FONT_BATTLE in roles), None)
+    battle_path = fonts_dir/battle[1] if battle else None
+    if battle_path is not None and battle_path.is_file():
+        examples += [
+            ('notice-blue', 'notice-blue/0/0', lambda: texture(notice, 0)),
+            ('notice-orange', 'notice-orange/0/0', lambda: texture(notice, 1)),
+            ('notice-red', 'notice-red/0/0', lambda: texture(notice, 2)),
+            ('notice-silver', 'notice-silver/0/0', lambda: texture(notice, 3)),
+            ('notice-green', 'notice-green/0/0', lambda: texture(notice, 4)),
+            ('notice-gold', 'notice-gold/0/0', lambda: texture(notice, 5)),
+            ('notice-purple', 'notice-purple/0/0', lambda: texture(notice, 6)),
+            ('combo-red-digits', 'combo-red-digits/0/8', lambda: texture(combo, 0)),
+            ('combo-hits', 'combo-hits/0/0', lambda: texture(combo, 2)),
+            ('combo-orange-digits', 'combo-orange-digits/0/8', lambda: texture(combo, 1)),
+            ('combo-message', 'combo-counter/0/0', lambda: texture(combo, 3)),
+            ('combo-message', 'combo-lock-on/0/0', lambda: texture(combo, 5)),
+            ('combo-message', 'combo-first-attack/0/0', lambda: texture(combo, 6)),
+            ('combo-message', 'combo-boost/0/0', lambda: texture(combo, 7)),
+            ('combo-power', 'combo-max-power/0/0', lambda: texture(combo, 4)),
+            ('timer-white', 'timer-white/0/8', lambda: texture(timer, 0, 0)),
+            ('timer-yellow', 'timer-yellow/0/8', lambda: texture(timer, 0, 1)),
+            ('timer-red', 'timer-red/0/8', lambda: texture(timer, 0, 2)),
+            ('win-counter', 'win-counter/0/0', lambda: texture(timer, 4)),
+            ('blast-stock-counter', 'blast-stock-counter/0/4', lambda: texture(timer, 14)),
+        ]
     with tempfile.TemporaryDirectory() as temporary:
         library = pathlib.Path(temporary)/'menu_text.so'
         subprocess.run(['cc', '-shared', '-fPIC', '-O2', str(ROOT/'port/src/gs/menu_text.c'),
                         str(ROOT/'port/src/gs/menu_labels.c'), '-o', str(library), '-lm', '-lpthread'], check=True)
-        prior = {key: os.environ.get(key) for key in ('BT3_MENU_FONT', 'BT3_FONTS')}
+        prior = {key: os.environ.get(key) for key in ('BT3_MENU_FONT', 'BT3_FONTS', 'BT3_DATA')}
         os.environ['BT3_MENU_FONT'] = str(labels_dir.resolve())
         os.environ['BT3_FONTS'] = str(fonts_dir.resolve())
+        os.environ['BT3_DATA'] = str(data_root.resolve())
         try:
             lib = ctypes.CDLL(str(library))
             lib.MenuText_SetFont.argtypes = [ctypes.c_int]
+            lib.MenuText_SetBattleFont.argtypes = [ctypes.c_int]
             lib.MenuText_Render.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                             ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
             lib.MenuText_Render.restype = ctypes.c_void_p
             libc = ctypes.CDLL(None)
             libc.free.argtypes = [ctypes.c_void_p]
             lib.MenuText_SetFont(choice)
+            if battle_path is not None and battle_path.is_file():
+                lib.MenuText_SetBattleFont(battle[0])
+                if lib.MenuText_GetBattleFont() != battle[0]:
+                    raise ValueError(f'Could not load Battle font: {battle_path}')
             if lib.MenuText_GetFont() != choice:
                 raise ValueError(f'Could not load Menu font: {name} ({path})')
             rendered_rows = []
@@ -413,9 +484,10 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
     comparison = Image.new('RGB', (column*2+48, header+sum(heights)+24), '#243c58')
     draw = ImageDraw.Draw(comparison)
     draw.text((24, 12), 'Menu text styles', font=title_font, fill='white')
-    draw.text((24, 62), f'Font: {name}  ({path})', font=annotation, fill='#ffe8d0')
+    battle_font = battle[2] if battle_path is not None and battle_path.is_file() else 'Original (font missing)'
+    draw.text((24, 62), f'Menu: {name}  |  Battle: {battle_font}', font=annotation, fill='#ffe8d0')
     draw.text((24, 98), 'Original game art', font=annotation, fill='white')
-    draw.text((column+24, 98), 'Rendered with selected font', font=annotation, fill='white')
+    draw.text((column+24, 98), 'Rendered replacement text', font=annotation, fill='white')
     top = header
     for (style, label, pair), row_height in zip(rendered_rows, heights):
         draw.text((24, top+4), f'{style}  —  {label}', font=annotation, fill='white')
@@ -425,7 +497,7 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
     output = output or ROOT/'port/build/menu-font/style-comparison.png'
     output.parent.mkdir(parents=True, exist_ok=True)
     comparison.save(output)
-    print(f'Style comparison: {output}\nFont: {name} ({path})')
+    print(f'Style comparison: {output}\nMenu font: {name} ({path})\nBattle font: {battle_font}')
 
 
 def main():

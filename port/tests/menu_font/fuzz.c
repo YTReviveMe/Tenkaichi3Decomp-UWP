@@ -3,7 +3,7 @@
  * The game reads a font the user chose at every start, so a file that is cut short or has flipped bits must be
  * turned down (the setting falls back to "Original"), and one that passes the checks must be safe to draw with.
  * This takes a good font, damages a copy in many ways, and each time does everything the game does with a font:
- * chooses it for both settings, draws menu labels, an added stage's and song's name, and the game's glyph sheets,
+ * chooses it for all three settings, draws menu and battle labels, an added stage's and song's name, and the game's glyph sheets,
  * and, for the fonts that were accepted, every glyph the font has. Built with the address and undefined-behaviour
  * sanitizers, which stop the program at the first read or write outside a buffer.
  *
@@ -62,15 +62,15 @@ static void setup(void) {
     for (i = 0; i < sizeof(sTex); i++) { hash = (hash ^ sTex[i]) * UINT64_C(1099511628211); }
     snprintf(path, sizeof(path), "%s/fonts.tsv", sDir);
     fp = fopen(path, "wb");
-    fprintf(fp, "f.ttf\tFuzzed\t3\n");
+    fprintf(fp, "f.ttf\tFuzzed\t7\n");
     fclose(fp);
     snprintf(path, sizeof(path), "%s/labels.tsv", sDir);
     fp = fopen(path, "wb");
     fprintf(fp, "# " MENU_LABELS_VERSION " made by port/tests/menu_font/fuzz.c\n");
     for (n = 0; n < 8; n++) { /* eight rows of 8 pixels: plain, centred, italic, measured width, outer outline, no shadow */
-        fprintf(fp, "%016llx\t64\t64\t%d\t8\t%d\t%d\t%d\t%d\t%d\t0\t64\t%d\tf4ef89\td2684b\t2c151b\t%d\t%d\t%d\td9c2c1\t%d\t2c151b\t0\tf4ef89\t2c151b\t%s\n",
+        fprintf(fp, "%016llx\t64\t64\t%d\t8\t%d\t%d\t%d\t%d\t%d\t0\t64\t%d\tf4ef89\td2684b\t000000\t0\t2c151b\t%d\t%d\t%d\td9c2c1\t%d\t2c151b\t0\tf4ef89\t2c151b\t0\t0\t%d\t%s\n",
                 (unsigned long long)hash, n * 8, 4 + n % 4, 6 + n % 3, n & 1, n % 5, 500 + n * 200, n == 3 ? 40 : 0,
-                n == 2 || n == 6, n == 4 ? 2000 : -1, n == 4 ? 2000 : 0, n != 5, kTexts[n]);
+                n == 2 || n == 6, n == 4 ? 2000 : -1, n == 4 ? 2000 : 0, n != 5, n & 1, kTexts[n]);
     }
     fclose(fp);
     snprintf(path, sizeof(path), "%s/name-styles.tsv", sDir);
@@ -127,16 +127,19 @@ static void exercise(void) {
     /* the game's own way: the settings, then the textures */
     pthread_mutex_lock(&sLock);
     menu_text_fonts();
-    if (sFontCount > 0) { sFonts[0].usage = 3; } /* (a font that failed is not offered again in a run: here it is) */
+    if (sFontCount > 0) { sFonts[0].uses[FONT_MENU] = sFonts[0].uses[FONT_DIALOGUE] = sFonts[0].uses[FONT_BATTLE] = 1; }
     pthread_mutex_unlock(&sLock);
     MenuText_SetFont(0);
+    MenuText_SetBattleFont(0);
     MenuText_SetSharedFont(0);
     MenuText_SetFont(1);
     pthread_mutex_lock(&sLock);
-    if (sFontCount > 0) { sFonts[0].usage = 3; }
+    if (sFontCount > 0) { sFonts[0].uses[FONT_MENU] = sFonts[0].uses[FONT_DIALOGUE] = sFonts[0].uses[FONT_BATTLE] = 1; }
     pthread_mutex_unlock(&sLock);
+    MenuText_SetBattleFont(1);
     MenuText_SetSharedFont(1);
-    if ((MenuText_GetFont() != 0) != (why == NULL) || (MenuText_GetSharedFont() != 0) != (why == NULL)) {
+    if ((MenuText_GetFont() != 0) != (why == NULL) || (MenuText_GetBattleFont() != 0) != (why == NULL) ||
+        (MenuText_GetSharedFont() != 0) != (why == NULL)) {
         fprintf(stderr, "fuzz: the settings and the check disagree about %s\n", sFontPath);
         abort();
     }

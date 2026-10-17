@@ -177,6 +177,7 @@ void HudNode_Update(HudNode *node) {
 #define PORT_2D_CENTER 0x12
 #define PORT_2D_END 0x13
 #define PORT_2D_BY_POS 0x14
+#define PORT_2D_NOTICE 0x18
 extern void Port_GsMarker(s32 effect);
 #endif
 
@@ -190,8 +191,11 @@ void HudNode_Draw(HudNode *node, s32 mirror) {
         return;
     }
 #ifdef PORT
-    if (node == gHud->timer || node == gHud->notice) {
-        Port_GsMarker(PORT_2D_CENTER); /* the parts without a side */
+    if (node == gHud->timer) {
+        Port_GsMarker(PORT_2D_CENTER);
+    }
+    if (node == gHud->notice) {
+        Port_GsMarker(PORT_2D_NOTICE); /* the announcement's word, mask, streak and fragments share one scale */
     }
     if (node == gHud->caption) {
         Port_GsMarker(PORT_2D_BY_POS); /* captions (technique names) appear on either side: the side they are on */
@@ -223,6 +227,11 @@ void HudNode_Draw(HudNode *node, s32 mirror) {
         HudNode_Draw(node->children[i], (mirror || (node->flags & HUD_NODE_MIRROR)) ? 1 : 0);
     }
     Vu0Cur_Pop();
+#ifdef PORT
+    if (node == gHud->notice) {
+        Port_GsMarker(PORT_2D_CENTER);
+    }
+#endif
 }
 
 /* Sets how a replay shows the HUD (see Hud_Draw). */

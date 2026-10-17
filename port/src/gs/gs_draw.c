@@ -129,6 +129,7 @@ typedef struct Tex {
     unsigned last; /* frame last used */
     uint32_t bytes;
     int replaced;  /* 1: texture pack, 2: vector menu labels, 3: packed shared glyphs */
+    int battleText; /* the source texture has Battle font artwork, even with Original selected */
     uint32_t ow, oh, rw, rh; /* then: the original's size and the replacement's */
     uint32_t amax;           /* and the largest alpha byte of the original */
 } Tex;
@@ -427,7 +428,7 @@ static GsTex texture_get(int ctx) {
     uint64_t tex_t0;
     TexPackImage pack;
     uint32_t packMaxAlpha = 255, rw = tw, rh = th;
-    int packFormat = GS_TEXFMT_RGBA8, replaced = 0, menuText = 0, sharedText = 0;
+    int packFormat = GS_TEXFMT_RGBA8, replaced = 0, menuText = 0, sharedText = 0, battleText = 0;
 
     if (tw > 1024) { tw = 1024; }
     if (th > 1024) { th = 1024; }
@@ -440,8 +441,8 @@ static GsTex texture_get(int ctx) {
     if (bits <= 8) {
         gen = (gen ^ clut_hash(cbp, cpsm, bits == 8 ? 256 : 16)) * 16777619u;
     }
-    /* a font instead of the game's lettering (menu_text.c): the labels and glyph sheets it draws follow the font
-       and the resolution. Nothing is added with both settings on "Original". */
+    /* Font replacements follow their settings and resolution. A new label catalog also refreshes cached Battle
+       texture identities when the artwork is still on "Original". */
     gen ^= MenuText_TexKey((int)tw, (int)th, bits <= 8, (int)tbp, (int)cbp, MenuText_RasterScale(SCALE));
     if (sTexPackOn && TexPack_Count() != 0) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
@@ -491,8 +492,11 @@ static GsTex texture_get(int ctx) {
             }
         }
     }
-    px = replaced ? NULL : malloc((size_t)tw * th * 4);
-    for (y = 0; !replaced && y < th; y++) {
+    /* A texture pack still uses the game's source pixels to identify Battle text for widescreen geometry. */
+    px = !replaced || MenuText_MayHaveBattleTexture((int)tw, (int)th, bits <= 8) ?
+         malloc((size_t)tw * th * 4) : NULL;
+    if (!replaced && px == NULL) { return gsWhite; }
+    for (y = 0; px != NULL && y < th; y++) {
         for (x = 0; x < tw; x++) {
             uint32_t c = Gs_VramRead(tbp, tbw, psm, x, y), a;
             if (bits > 8) {
@@ -507,6 +511,13 @@ static GsTex texture_get(int ctx) {
                         above 0x80 matter: the see-through pass gives palettes alpha 0xF9 to write an id */
             px[y * tw + x] = c;
         }
+    }
+    if (px != NULL) {
+        battleText = MenuText_IsBattleTexture((const uint8_t *)px, (int)tw, (int)th, bits <= 8);
+    }
+    if (replaced) {
+        free(px);
+        px = NULL;
     }
     if (!replaced && px != NULL) {
         int mw, mh;
@@ -608,6 +619,7 @@ static GsTex texture_get(int ctx) {
     }
     sTexBytes += t->bytes;
     t->replaced = replaced ? 1 : sharedText ? 3 : menuText ? 2 : 0;
+    t->battleText = battleText;
     t->ow = tw;
     t->oh = th;
     t->rw = rw;
@@ -1180,6 +1192,7 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
     if (!draw_state(ctx, type == 1 ? 1 : type == 0 ? 2 : 0, type == 6, 0, &d, &us, &vs)) {
         return;
     }
+    int battleText = !d.tex_is_target && sLast != NULL && sLast->tex == d.tex && sLast->battleText;
     int tbo = (prim >> 4) & 1 && ((t0 >> 20) & 0x3F) == TBO_PSM; /* a Tenkaichi Budokai Online picture */
     if (type == 6 || fst) {
         d.sampler &= 7; /* 2D art: never the smaller copies of a replacement */
@@ -1344,7 +1357,10 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
     /* (Not the cross-fade's picture: it is the whole frame as it was shown, wide view and all, drawn back over the
        whole frame in strips. Each strip is narrower than the screen, so the rule below took it for a piece of 2D
        art and the old shot was drawn at three quarters of the width over the new one: seen by the user.) */
-    if (Port_IsWide() && (!gPortMenuMode || (gsAnchor == 7 && Port_PageAspectMilli() > 1340)) && !sWholeFrame && !d.tex_is_target && !tbo && (type == 6 || fst) && gsTargets[d.target].fbp == (uint32_t)gGsMainFbp) {
+    if (Port_IsWide() && (!gPortMenuMode || (gsAnchor == 7 && Port_PageAspectMilli() > 1340) ||
+                          (battleText && Port_PageAspectMilli() > 1340)) &&
+        !sWholeFrame && !d.tex_is_target && !tbo && (type == 6 || fst || battleText || gsAnchor == 8) &&
+        gsTargets[d.target].fbp == (uint32_t)gGsMainFbp) {
         /* Widescreen. The 3D scene is projected for a 16:9 picture by the game itself; 2D art is laid out for
            4:3 and would come out a third too wide. Each 2D piece is narrowed to 3/4 about a fixed point:
              (not in the menus: their pages are shown whole, stretched to the width; see Port_WideFactor)
@@ -1354,7 +1370,9 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
            Only what is drawn into the picture itself: the work buffers of the effects and of the shadow are
            filled with 2D rectangles too, and narrowing those left unfilled bands and stripes in them.
            Left alone: full-screen fills and fades (untextured, full height), and in a fight sprites as wide as
-           the screen (flashes, speed lines) and 2D triangles outside the HUD. */
+           the screen (flashes, speed lines) and 2D triangles outside the HUD. Battle text is kept in proportion
+           even when its atlas piece is almost as wide as the screen. The announcement's mask, streak and rotated
+           pieces use the same scale as its word, so their alpha and additive passes remain aligned. */
         float x0 = gsVerts[d.first].x, x1 = x0, y0 = gsVerts[d.first].y, y1 = y0, pivot = -1.0f;
         uint32_t k;
         for (k = d.first; k < gsVertCount; k++) {
@@ -1363,11 +1381,11 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
             if (gsVerts[k].y < y0) { y0 = gsVerts[k].y; }
             if (gsVerts[k].y > y1) { y1 = gsVerts[k].y; }
         }
-        if (type == 6 && !d.mode[0] && y1 - y0 >= 400.0f) {
+        if (type == 6 && !d.mode[0] && y1 - y0 >= 400.0f && !battleText) {
             pivot = -1.0f;
-        } else if (x1 - x0 >= 480.0f && gsAnchor != 5 && gsAnchor != 6) {
-            /* as wide as the screen (the bands and streaks of READY / FIGHT, flashes, speed lines): meant to
-               reach from edge to edge, so it keeps the full width */
+        } else if (x1 - x0 >= 480.0f && gsAnchor != 5 && gsAnchor != 6 && gsAnchor != 8 && !battleText) {
+            /* Other screen-wide flashes and speed lines still reach the edges. Announcement bands and streaks
+               follow their word's width so the mask and additive layers stay together. */
             pivot = -1.0f;
         } else if (gsAnchor == 7) {
             /* Loading animations keep their left margin and sprite proportions, even in menu mode.
@@ -1651,8 +1669,8 @@ void GsGpu_Native(int effect) {
 
     /* 1 = outline. 2 (the see-through tint) is drawn by the generic table pass now (depth_clut), from the game's
        own table. */
-    if (effect >= 0x15 && effect <= 0x17) {
-        /* 5/6: extended life bar, anchored left/right even beyond 480 pixels; 7: loading page, anchored left. */
+    if (effect >= 0x15 && effect <= 0x18) {
+        /* 5/6: extended life bar; 7: loading page; 8: an announcement and all its effect layers. */
         gsAnchor = effect - 0x10;
         return;
     }
@@ -1810,6 +1828,7 @@ void GsGpu_GetSettings(PortVideo *v) {
     v->texPack = sTexPackOn;
     v->texPackCount = TexPack_Count();
     v->menuFont = MenuText_GetFont();
+    v->battleFont = MenuText_GetBattleFont();
     v->textFont = MenuText_GetSharedFont();
     v->smooth2d = sSmooth2d;
     v->vsync = Port_Setting("vsync", 0) != 0;
@@ -1856,7 +1875,9 @@ void GsGpu_SetSettings(const PortVideo *v) {
     sDisplaySetting = v->display;
     sTexPackOn = v->texPack != 0;
     MenuText_SetFont(v->menuFont);
+    MenuText_SetBattleFont(v->battleFont);
     MenuText_SetSharedFont(v->textFont);
+    Port_SettingSave("battle_font_id", MenuText_BattleFontIdToSave());
     Port_SettingSave("text_font_id", MenuText_FontId(MenuText_GetSharedFont()));
     Port_SettingSave("menu_font_id", MenuText_FontIdToSave());
     sSmooth2d = v->smooth2d != 0;
@@ -1953,6 +1974,7 @@ int GsGpu_Init(void) {
     { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: display settings loaded; initializing menu font"); }
 #endif
     MenuText_SetFontId(Port_Setting("menu_font_id", 0));
+    MenuText_SetBattleFontId(Port_Setting("battle_font_id", 0));
 #ifdef BT3_UWP
     { extern void PortUwp_Trace(const char *message); PortUwp_Trace("Graphics: menu font initialized; initializing shared font"); }
 #endif

@@ -1319,6 +1319,20 @@ void BtlMember_ApplyItems(BattleMember *m) {
     s32 stats[5];
     s32 i;
 
+#ifdef PORT
+    {
+        /* Online (a session of gs/net.c) nobody has items: the session starts from an empty save, so every item set
+           is empty, but the character selects read a set by the cell of the grid (105 cells) from a table of 97
+           (src/menu/menu_c_e.c, menu_e_b.c: set 2 chosen, then the random cell drawing a cell past 96), and the
+           bytes behind the table (the saved custom characters, which list nothing, and which items are owned, all
+           of them in a session) are taken for item ids: a player got items, a red Potara. The game does it on the
+           PS2 too, with the player's own save; online it is closed here, where every fighter's items arrive. */
+        extern int Port_NetSession(void);
+        if (Port_NetSession()) {
+            memset(&m->items, 0, sizeof(m->items));
+        }
+    }
+#endif
     ItemSet_GetStats(&m->items, stats, ability, m->chara);
     m->bonus[0] = 0;
     m->bonus[1] = stats[2];

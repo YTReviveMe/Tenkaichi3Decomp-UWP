@@ -322,6 +322,10 @@ void Port_VBlank(void) {
         extern void PortA11y_GameTick(void); /* a11y_game.c: what the screen reader says (off without its library) */
         PortA11y_GameTick();
     }
+    {
+        extern void PortPanels_GameTick(void); /* fight_panels.c: what the side bars show of a fight */
+        PortPanels_GameTick();
+    }
     {   /* BT3_PAD_TABLE=<file>: what each pad read during the blank that ends here, 36 bytes per blank (the input
            of a session by blank and by pad: gs/net.c plays one player's column of it for its tests) */
         PORT_HOST static FILE *table = NULL;

@@ -7,7 +7,7 @@ extern "C" {
 
 /* Port-only exit question drawn by the game's own memory-card Dialog. */
 void PortQuit_Request(void);
-void PortQuit_Draw(void);
+void PortQuit_Draw(int vsyncs);
 int PortQuit_Active(void);
 int PortQuit_Failed(void);
 int PortQuit_Ready(void);

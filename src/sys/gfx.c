@@ -181,8 +181,8 @@ void Gfx_EndFrame(s32 vsyncs) {
     Fade_DrawScreen();
 #ifdef PORT
     /* The PC exit question uses the game's animated memory-card dialog above the current screen. */
-    extern void PortQuit_Draw(void);
-    PortQuit_Draw();
+    extern void PortQuit_Draw(int vsyncs);
+    PortQuit_Draw(vsyncs); /* (the blanks this frame lasts: a fight's frame is two) */
 #endif
     FontIcon_Tick(vsyncs);
     PadWatch_Update();

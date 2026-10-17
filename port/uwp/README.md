@@ -2,7 +2,7 @@
 
 `bt3_uwp_game` builds the decompiled game for x64 UWP. The package includes SDL3, DXIL shaders, menu assets, fonts, and the executable's data and state maps. Game files are supplied by the player.
 
-The latest package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Internal-Textures-0.0.27.0.zip`. Version 0.0.25.0 is the last build confirmed on Xbox. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
+The upstream 0.1.36 test package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Upstream-0.1.36-0.0.31.0.zip`. Version 0.0.27.0 remains the stable fallback while testers check this update on Xbox. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
 
 ## Game data
 
