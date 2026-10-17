@@ -26,6 +26,10 @@
 #include <time.h>
 #include "gs_internal.h"
 #include "../port_addr.h"
+#ifdef BT3_UWP
+#include "gs_texpack.h"
+extern void PortUwp_Trace(const char *message);
+#endif
 
 #define SURF_W 1024
 #define SURF_H 1024
@@ -1351,6 +1355,22 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
         if (work > worst) { worst = work; }
         if (work > 33366700ull) { over++; }
         if (++n == 60) {
+#ifdef BT3_UWP
+            static unsigned lastReplaced;
+            extern unsigned gGpuTexReplaced;
+            unsigned replacements = gGpuTexReplaced - lastReplaced;
+            lastReplaced = gGpuTexReplaced;
+            if (over != 0 && TexPack_Count() != 0) {
+                char message[192];
+                snprintf(message, sizeof(message),
+                         "Texture perf: avg %.1f ms, worst %.1f ms, %u/60 slow; game %.1f ms, list %.1f ms, decode %.1f ms, submit %.1f ms; %u replacements",
+                         (double)sum / 60e6, (double)worst / 1e6, over,
+                         (double)sumGame / 60e6, (double)sumList / 60e6,
+                         (double)sumTex / 60e6, (double)sumEnd / 60e6,
+                         replacements);
+                PortUwp_Trace(message);
+            }
+#endif
             if (getenv("BT3_GS_VERBOSE") != NULL) {
                 fprintf(stderr, "time: frame %u: work per frame: average %.1f ms, worst %.1f ms, %u of 60 over the 33.4 ms budget\n",
                         sFrame, (double)sum / 60e6, (double)worst / 1e6, over);

@@ -192,6 +192,60 @@ static void tex_destroy(GsTex tex) {
 
 static int tex_slots_left(void) { return MAX_PENDING - sPendingCount; }
 
+static void upload_pending(SDL_GPUCopyPass *copy) {
+    uint32_t offsets[MAX_PENDING];
+    int first = 0;
+
+    while (first < sPendingCount) {
+        SDL_GPUTransferBufferCreateInfo ti;
+        SDL_GPUTransferBuffer *tb;
+        uint8_t *mapped;
+        uint32_t size = 0;
+        int end = first, i;
+
+        while (end < sPendingCount) {
+            uint32_t bytes = sPending[end].bytes ? sPending[end].bytes : sPending[end].w * sPending[end].h * 4;
+            uint32_t offset = (size + 511u) & ~511u;
+            if (end > first && (uint64_t)offset + bytes > 8u * 1024u * 1024u) {
+                break;
+            }
+            offsets[end] = offset;
+            size = offset + bytes;
+            end++;
+        }
+        SDL_zero(ti);
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = size;
+        tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
+        mapped = tb != NULL ? SDL_MapGPUTransferBuffer(sDev, tb, false) : NULL;
+        if (mapped != NULL) {
+            for (i = first; i < end; i++) {
+                uint32_t bytes = sPending[i].bytes ? sPending[i].bytes : sPending[i].w * sPending[i].h * 4;
+                memcpy(mapped + offsets[i], sPending[i].px, bytes);
+            }
+            SDL_UnmapGPUTransferBuffer(sDev, tb);
+            for (i = first; i < end; i++) {
+                SDL_GPUTextureTransferInfo src;
+                SDL_GPUTextureRegion dst;
+                SDL_zero(src);
+                src.transfer_buffer = tb;
+                src.offset = offsets[i];
+                SDL_zero(dst);
+                dst.texture = sPending[i].tex;
+                dst.mip_level = sPending[i].level;
+                dst.w = sPending[i].w;
+                dst.h = sPending[i].h;
+                dst.d = 1;
+                SDL_UploadToGPUTexture(copy, &src, &dst, false);
+            }
+        }
+        if (tb != NULL) SDL_ReleaseGPUTransferBuffer(sDev, tb);
+        for (i = first; i < end; i++) free(sPending[i].px);
+        first = end;
+    }
+    sPendingCount = 0;
+}
+
 static GsTex white_tex(void) { return (GsTex)(uintptr_t)sWhite; }
 
 /* gsScale just changed: the shared table is emptied after this returns; every attachment and helper sized
@@ -727,32 +781,7 @@ static void vk_frame_end(void) {
         dst.size = gsVuIdxCount * sizeof(uint32_t);
         SDL_UploadToGPUBuffer(copy, &src, &dst, true);
     }
-    for (i = 0; i < sPendingCount; i++) {
-        SDL_GPUTransferBufferCreateInfo ti;
-        SDL_GPUTransferBuffer *tb;
-        SDL_GPUTextureTransferInfo src;
-        SDL_GPUTextureRegion dst;
-        void *p;
-        SDL_zero(ti);
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = sPending[i].bytes ? sPending[i].bytes : sPending[i].w * sPending[i].h * 4;
-        tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
-        p = SDL_MapGPUTransferBuffer(sDev, tb, false);
-        memcpy(p, sPending[i].px, ti.size);
-        SDL_UnmapGPUTransferBuffer(sDev, tb);
-        SDL_zero(src);
-        src.transfer_buffer = tb;
-        SDL_zero(dst);
-        dst.texture = sPending[i].tex;
-        dst.mip_level = sPending[i].level;
-        dst.w = sPending[i].w;
-        dst.h = sPending[i].h;
-        dst.d = 1;
-        SDL_UploadToGPUTexture(copy, &src, &dst, false);
-        SDL_ReleaseGPUTransferBuffer(sDev, tb);
-        free(sPending[i].px);
-    }
-    sPendingCount = 0;
+    upload_pending(copy);
     /* A picture the game uploaded straight into a display buffer (a movie frame): from GS memory into a 512 x 448
        texture here, then scaled into that buffer's texture before the frame's draws (a fade goes on top). */
     for (i = 0; i < 2; i++) {
