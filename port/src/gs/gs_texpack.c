@@ -75,9 +75,9 @@ static void add(const char *dir, const char *name) {
         return;
     }
     stem_end = n - 4;
-    if (stem_end > 4 && SDL_strcasecmp(name + stem_end - 4, ".jpg") == 0) {
+    if (stem_end > 4 && SDL_strncasecmp(name + stem_end - 4, ".jpg", 4) == 0) {
         stem_end -= 4;
-    } else if (stem_end > 5 && SDL_strcasecmp(name + stem_end - 5, ".jpeg") == 0) {
+    } else if (stem_end > 5 && SDL_strncasecmp(name + stem_end - 5, ".jpeg", 5) == 0) {
         stem_end -= 5;
     }
     for (i = 0; i < stem_end; i++) {
