@@ -65,6 +65,7 @@ static const char *find(uint64_t tex, uint64_t clut, uint32_t bits, int pal) {
 /* "1dd4c76113969303-56e3d4469d2ad392-00005e54.dds" */
 static void add(const char *dir, const char *name) {
     size_t n = strlen(name);
+    size_t stem_end;
     char part[3][20];
     int parts = 0, len = 0;
     size_t i;
@@ -73,7 +74,13 @@ static void add(const char *dir, const char *name) {
     if (n < 8 || (SDL_strcasecmp(name + n - 4, ".dds") != 0 && SDL_strcasecmp(name + n - 4, ".png") != 0)) {
         return;
     }
-    for (i = 0; i < n - 4; i++) {
+    stem_end = n - 4;
+    if (stem_end > 4 && SDL_strcasecmp(name + stem_end - 4, ".jpg") == 0) {
+        stem_end -= 4;
+    } else if (stem_end > 5 && SDL_strcasecmp(name + stem_end - 5, ".jpeg") == 0) {
+        stem_end -= 5;
+    }
+    for (i = 0; i < stem_end; i++) {
         char c = name[i];
         if (c == '-') {
             if (len == 0 || parts == 2) {
