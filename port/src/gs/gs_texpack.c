@@ -129,34 +129,42 @@ static void add(const char *dir, const char *name) {
 
 #ifdef BT3_UWP
 /* UWP directory access uses the FromApp dirent shim. */
-static void walk_uwp(const char *dir, unsigned depth) {
+typedef struct ScanStats {
+    unsigned entries, folders, rejected, openError;
+} ScanStats;
+
+static void walk_uwp(const char *dir, unsigned depth, ScanStats *stats) {
     DIR *search = opendir(dir);
     struct dirent *item;
 
     if (search == NULL) {
+        if (depth == 0) stats->openError = GetLastError();
         return;
     }
     while ((item = readdir(search)) != NULL) {
-        struct stat info;
         size_t n;
         char *path;
 
         if (strcmp(item->d_name, ".") == 0 || strcmp(item->d_name, "..") == 0) {
             continue;
         }
+        stats->entries++;
         n = strlen(dir) + strlen(item->d_name) + 2;
         path = malloc(n);
         if (path == NULL) {
             break;
         }
         snprintf(path, n, "%s%s", dir, item->d_name);
-        if (stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR) {
+        if (item->is_dir) {
+            stats->folders++;
             if (depth < 16) {
                 strcat(path, "/");
-                walk_uwp(path, depth + 1);
+                walk_uwp(path, depth + 1, stats);
             }
         } else {
+            uint32_t before = sCount;
             add(dir, item->d_name);
+            if (sCount == before) stats->rejected++;
         }
         free(path);
     }
@@ -188,6 +196,7 @@ void TexPack_Init(void) {
     uint32_t i, dup = 0;
 #ifdef BT3_UWP
     struct stat info;
+    ScanStats stats = {0};
 #else
     SDL_PathInfo info;
 #endif
@@ -219,16 +228,18 @@ void TexPack_Init(void) {
         strcat(dir, "/");
     }
 #ifdef BT3_UWP
-    walk_uwp(dir, 0);
+    walk_uwp(dir, 0, &stats);
 #else
     SDL_EnumerateDirectory(dir, walk, NULL);
 #endif
     free(dir);
 #ifdef BT3_UWP
     {
-        char message[96];
+        char message[192];
         extern void PortUwp_Trace(const char *message);
-        snprintf(message, sizeof(message), "Texture pack: scan complete (%u files)", sCount);
+        snprintf(message, sizeof(message),
+                 "Texture pack: scan complete (%u files; %u entries, %u folders, %u rejected, open error %u)",
+                 sCount, stats.entries, stats.folders, stats.rejected, stats.openError);
         PortUwp_Trace(message);
     }
 #endif

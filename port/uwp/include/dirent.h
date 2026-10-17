@@ -9,7 +9,7 @@
 #undef far
 #undef small
 
-struct dirent { char d_name[1024]; };
+struct dirent { char d_name[1024]; int is_dir; };
 typedef struct bt3_dir { HANDLE handle; WIN32_FIND_DATAW data; struct dirent entry; int first; } DIR;
 
 static inline DIR *opendir(const char *path) {
@@ -20,6 +20,9 @@ static inline DIR *opendir(const char *path) {
     if (!pattern || !dir) { free(pattern); free(dir); return NULL; }
     MultiByteToWideChar(CP_UTF8, 0, path, -1, pattern, len);
     size_t at = (size_t)len - 1;
+    for (size_t i = 0; i < at; i++) {
+        if (pattern[i] == L'/') pattern[i] = L'\\';
+    }
     if (at > 0 && pattern[at - 1] != L'\\' && pattern[at - 1] != L'/') pattern[at++] = L'\\';
     pattern[at++] = L'*';
     pattern[at] = 0;
@@ -36,6 +39,7 @@ static inline struct dirent *readdir(DIR *dir) {
     else if (!FindNextFileW(dir->handle, &dir->data)) return NULL;
     if (!WideCharToMultiByte(CP_UTF8, 0, dir->data.cFileName, -1,
                              dir->entry.d_name, sizeof(dir->entry.d_name), NULL, NULL)) return NULL;
+    dir->entry.is_dir = (dir->data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     return &dir->entry;
 }
 static inline int closedir(DIR *dir) {
