@@ -31,6 +31,8 @@ if(BT3_GAME)
     list(APPEND tbo_assets "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/CREDITS.md")
     file(GLOB_RECURSE font_assets CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/fonts/*")
+    file(GLOB_RECURSE translation_assets CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../translations/*")
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tbo/ui/bg.png" OR
        NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/fonts/fonts.tsv")
         message(FATAL_ERROR "Tenkaichi Budokai Online artwork and fonts are required in the Xbox package")
@@ -47,6 +49,12 @@ if(BT3_GAME)
         endif()
         set_source_files_properties("${font_asset}" PROPERTIES
             VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION "${font_location}")
+    endforeach()
+    foreach(translation_asset IN LISTS translation_assets)
+        file(RELATIVE_PATH translation_relative "${CMAKE_CURRENT_SOURCE_DIR}/../translations" "${translation_asset}")
+        get_filename_component(translation_subdir "${translation_relative}" DIRECTORY)
+        set_source_files_properties("${translation_asset}" PROPERTIES
+            VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION "translations/${translation_subdir}")
     endforeach()
     set(sdl_dll "${BT3_SDL3_UWP_BUILD}/Release/SDL3.dll")
     set(data_manifest "${CMAKE_CURRENT_SOURCE_DIR}/../build/uwp/pack/Tenkaichi3DecompUWP.dat")
@@ -67,7 +75,7 @@ if(BT3_GAME)
         message(FATAL_ERROR "Run the UWP game and host object builders first")
     endif()
     add_executable(bt3_uwp_game WIN32 game_entry.cpp GamePackage.appxmanifest
-                   ${package_assets} ${tbo_assets} ${font_assets} "${sdl_dll}" "${data_manifest}")
+                   ${package_assets} ${tbo_assets} ${font_assets} ${translation_assets} "${sdl_dll}" "${data_manifest}")
     set_target_properties(bt3_uwp_game PROPERTIES OUTPUT_NAME Tenkaichi3DecompUWP)
     set_property(TARGET bt3_uwp_game PROPERTY VS_WINDOWS_TARGET_PLATFORM_MIN_VERSION "10.0.19041.0")
     set_source_files_properties(game_entry.cpp PROPERTIES COMPILE_OPTIONS /ZW)

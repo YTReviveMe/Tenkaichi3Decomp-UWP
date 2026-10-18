@@ -539,8 +539,8 @@ static unsigned script_buttons(void) {
  * next of up, right, down, left for as long as it is held: one press, one newly pressed direction, as a tap of
  * the d-pad gives. The stick and the d-pad go on working beside it.
  *
- * A press can be made to count for more than one (setting clash_square_x, in quarters: 4, 6, 7 or 8 for 1, 1.5,
- * 1.75 or 2; 1.75 unless set; BT3_CLASH_SQUARE_X): the d-pad has four buttons to tap in turn and the stick four
+ * A press can be made to count for more than one (setting clash_square_x, in quarters: 4, 6, 7, 8 or 9 for 1, 1.5,
+ * 1.75, 2 or 2.25; 2.25 unless set; BT3_CLASH_SQUARE_X): the d-pad has four buttons to tap in turn and the stick four
  * directions a turn, Square is one button. What a press is worth beyond one is kept as credit, and whenever a
  * whole point of it is owed the stick is put in the next direction for one frame without a press: four presses at
  * 1.75 give 2, 2, 2, 1. Still at most one newly pressed direction a frame, the game's own limit, and credit does
@@ -557,19 +557,19 @@ int Port_ClashSquare(void) {
     return sClashSquare;
 }
 
-/* What a press of Square is worth in a clash, in quarters of a point (4, 6, 7 or 8). */
+/* What a press of Square is worth in a clash, in quarters of a point (4, 6, 7, 8 or 9). */
 static int sClashSquareX = -1;
 
 int Port_ClashSquareX(void) {
     if (sClashSquareX < 0) {
-        int x = getenv("BT3_CLASH_SQUARE_X") != NULL ? atoi(getenv("BT3_CLASH_SQUARE_X")) : Port_Setting("clash_square_x", 7);
-        sClashSquareX = x == 4 || x == 6 || x == 7 || x == 8 ? x : 7;
+        int x = getenv("BT3_CLASH_SQUARE_X") != NULL ? atoi(getenv("BT3_CLASH_SQUARE_X")) : Port_Setting("clash_square_x", 9);
+        sClashSquareX = x == 4 || x == 6 || x == 7 || x == 8 || x == 9 ? x : 9;
     }
     return sClashSquareX;
 }
 
 void Port_ClashSquareXSet(int quarters) {
-    sClashSquareX = quarters == 4 || quarters == 6 || quarters == 8 ? quarters : 7;
+    sClashSquareX = quarters == 4 || quarters == 6 || quarters == 7 || quarters == 8 || quarters == 9 ? quarters : 9;
     Port_SettingSave("clash_square_x", sClashSquareX);
 }
 

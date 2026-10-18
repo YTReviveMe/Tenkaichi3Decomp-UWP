@@ -238,7 +238,12 @@ static unsigned char sPadLast[2][18]; /* (defined with the pads below) */
  * there but owed, and waited for when the game next reads the pads: the tick's length is the same, the pads are
  * read at its end instead of its start, and the picture follows the read by the time the work takes.
  * Nothing of the game's state changes: the same reads, the same blanks, in the same order (a recording replays
- * the same). Not in an online session and not with in-between pictures, which keep the original order.
+ * the same). Not in an online session.
+ * With in-between pictures ("Smooth motion") too: a tick's pictures are handed over when the game swaps its
+ * buffers, which is after its blanks; with the blanks waited for there, the first in-between picture came 33 ms
+ * after the pads were read and the tick's own picture a step later (measured with BT3_LAG_LOG at "60": 33 and 50
+ * ms). Owed, the swap follows the work at once, and the pictures are shown while the owed blanks are waited for,
+ * as they are while the game's own blanks are (late_wait).
  * (PORT_HOST: real time, not the game's state.) */
 PORT_HOST static int sLateOwed = 0, sLateOn = -1;
 
@@ -262,8 +267,15 @@ static void late_wait(void) {
         return;
     }
     while (sLateOwed > 0) {
+        extern void GsGpu_InterpPump(int ahead_ms, int all); /* gs/gs_draw.c: the tick's in-between pictures */
         sLateOwed--;
+        if (GsGpu_Enabled()) {
+            GsGpu_InterpPump(-1, 0); /* (those that are done before the blank) */
+        }
         vblank_wait();
+        if (GsGpu_Enabled()) {
+            GsGpu_InterpPump(6, 0); /* (those at it) */
+        }
     }
     Port_LagMark('L');
     if (GsGpu_Enabled()) {
@@ -299,7 +311,7 @@ void Port_VBlank(void) {
             int timed = (GsGpu_Enabled() || getenv("BT3_PACED") != NULL) && getenv("BT3_UNCAPPED") == NULL && !warp && !again;
             /* (not while blanks are run again after a rollback or run ahead for an online session: those are
                not shown and not timed, and waiting for a picture here would slow the catching up) */
-            if (timed && Port_LateInput() && !Port_NetSession() && gsInterp <= 0 && sLateOwed < 2) {
+            if (timed && Port_LateInput() && !Port_NetSession() && sLateOwed < 2) {
                 /* "Low input lag": the wait is owed and made before the next pad read instead (scePad2Read), so
                    that the tick is computed and shown right after its input was read, not a tick's wait later.
                    At most two blanks are owed (a fight's tick has two); where the game reads no pad (loading)

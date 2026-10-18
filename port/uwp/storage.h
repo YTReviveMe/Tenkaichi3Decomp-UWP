@@ -17,6 +17,7 @@ const char *PortUwp_ContentPath(void);
 const char *PortUwp_StorageError(void);
 void PortUwp_SetStorageError(const char *message);
 void PortUwp_Trace(const char *message);
+int PortUwp_RequestLanguageSetup(void);
 
 #ifdef __cplusplus
 }

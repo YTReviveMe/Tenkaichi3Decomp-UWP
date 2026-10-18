@@ -22,10 +22,13 @@ extern "C" int PortUwp_InitStorage(void) {
         if (!external.empty() && external.back() == '\r') external.pop_back();
         bool configured = PortUwp_ConfigureStorage(local.c_str(), external.c_str()) != 0;
         PortUwp_Trace(configured ? "Prepared content found" : PortUwp_StorageError());
-        if (!configured) {
-            PortUwp_Trace("Opening ISO setup");
+        const auto language_request = std::filesystem::path(app_local) / "add-eu-languages.txt";
+        const bool add_languages = configured && std::filesystem::exists(language_request);
+        if (add_languages) std::filesystem::remove(language_request);
+        if (!configured || add_languages) {
+            PortUwp_Trace(add_languages ? "Opening European language setup" : "Opening ISO setup");
             std::string installed;
-            if (!PortUwp_RunInstaller(local, installed)) {
+            if (!PortUwp_RunInstaller(local, installed, add_languages ? PortUwp_ContentPath() : "")) {
                 PortUwp_Trace(PortUwp_StorageError());
                 return 0;
             }
@@ -49,6 +52,16 @@ extern "C" int PortUwp_InitStorage(void) {
     } catch (...) {
         PortUwp_SetStorageError("Could not resolve UWP local storage");
         PortUwp_Trace(PortUwp_StorageError());
+        return 0;
+    }
+}
+
+extern "C" int PortUwp_RequestLanguageSetup(void) {
+    try {
+        const auto local = winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path();
+        std::ofstream request(std::filesystem::path(local.c_str()) / "add-eu-languages.txt", std::ios::trunc);
+        return request.good();
+    } catch (...) {
         return 0;
     }
 }

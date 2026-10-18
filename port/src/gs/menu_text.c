@@ -23,6 +23,8 @@
  * replacements take precedence. */
 #include "menu_text.h"
 #include "menu_labels.h"
+#include "ui_text_extract.h" /* UiText_EuropeanOnStartup */
+#include "menu_translation.h"
 #include "../port_addr.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +40,12 @@ extern void PortUwp_Trace(const char *message);
 #else
 #define MT_TRACE(message) ((void)0)
 #endif
+#ifdef _WIN32
+#include <windows.h> /* GetModuleFileNameA */
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h> /* _NSGetExecutablePath */
+#endif
+extern int Port_Setting(const char *name, int def);
 #define STBTT_assert(x) ((void)0) /* never stops the game over a font; face_open has checked what it relies on */
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -377,6 +385,7 @@ typedef struct MenuFont {
 } MenuFont;
 static MenuFont *sFonts;
 static int sFontCount, sFontsLoaded, sLabelsThere;
+static int sBootAwaitLanguage;
 static char sFontDir[1024], sLabelDir[1024], sDataDir[1024];
 
 /* The list of labels being made from the disc (see the top): */
@@ -393,6 +402,40 @@ static int file_there(const char *path) {
     return fp != NULL;
 }
 
+/* The fonts' folder when the program is started from another folder than its own (seen by the user: a fresh
+   checkout, the game run from elsewhere, "only Original and no fonts"): fonts/ next to the program (a release),
+   or the checkout's port/third_party/fonts from the program in port/build. 0: neither is there. */
+static int font_dir_by_program(char *out, size_t size) {
+    static const char *const kTry[] = {"fonts", "../third_party/fonts"};
+    char exe[1024], path[1200];
+    size_t i;
+    char *slash;
+#ifdef _WIN32
+    long n = (long)GetModuleFileNameA(NULL, exe, sizeof(exe) - 1);
+#elif defined(__APPLE__)
+    uint32_t cap = sizeof(exe) - 1;
+    long n = _NSGetExecutablePath(exe, &cap) == 0 ? (long)strlen(exe) : -1;
+#else
+    long n = (long)readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+#endif
+    if (n <= 0 || n >= (long)sizeof(exe) - 1) { return 0; }
+    exe[n] = '\0';
+    slash = strrchr(exe, '/');
+#ifdef _WIN32
+    if (strrchr(exe, '\\') > slash) { slash = strrchr(exe, '\\'); }
+#endif
+    if (slash == NULL) { return 0; }
+    slash[1] = '\0';
+    for (i = 0; i < sizeof(kTry) / sizeof(kTry[0]); i++) {
+        snprintf(path, sizeof(path), "%s%s/fonts.tsv", exe, kTry[i]);
+        if (file_there(path)) {
+            snprintf(out, size, "%s%s", exe, kTry[i]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* What labels.tsv the folder has: 0 none, 1 the current layout, 2 an older layout. */
 static int labels_state(void) {
     char path[1200], line[256];
@@ -401,7 +444,7 @@ static int labels_state(void) {
     snprintf(path, sizeof(path), "%s/labels.tsv", sLabelDir);
     fp = fopen(path, "rb");
     if (fp == NULL) { return 0; }
-    if (fgets(line, sizeof(line), fp) != NULL && strstr(line, MENU_LABELS_VERSION) != NULL) { state = 1; }
+    if (fgets(line, sizeof(line), fp) != NULL && strstr(line, MENU_LABELS_VERSION) != NULL) state = 1;
     fclose(fp);
     return state;
 }
@@ -419,6 +462,9 @@ static void menu_text_dirs(void) {
         snprintf(sFontDir, sizeof(sFontDir), "%sfonts", base != NULL ? base : "");
 #else
         snprintf(sFontDir, sizeof(sFontDir), "%s", file_there("fonts/fonts.tsv") ? "fonts" : "port/third_party/fonts");
+        if (!file_there("fonts/fonts.tsv") && !file_there("port/third_party/fonts/fonts.tsv")) {
+            font_dir_by_program(sFontDir, sizeof(sFontDir));
+        }
 #endif
     }
     if (labels != NULL) {
@@ -428,6 +474,33 @@ static void menu_text_dirs(void) {
     }
     snprintf(sDataDir, sizeof(sDataDir), "%s", data != NULL ? data : "gamedata");
     MT_TRACE("Menu text: checking label folder");
+    {   /* the European disc's languages, from the archives the setup took (once: the first start after it) */
+        static int done;
+        if (!done && sLabelDir[0] != '\0') {
+            char why[300];
+            struct timespec a, b;
+            int made;
+            done = 1;
+            clock_gettime(CLOCK_MONOTONIC, &a);
+            made = UiText_EuropeanOnStartup(sLabelDir, why, sizeof(why));
+            clock_gettime(CLOCK_MONOTONIC, &b);
+            if (made != 0) {
+                fprintf(stderr, made > 0 ? "bt3: European disc: %s (%ld ms)\n" : "bt3: European disc: no languages: %s (%ld ms)\n", why,
+                        (long)((b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000));
+            }
+        }
+    }
+    if (MenuTranslation_BootPending()) {
+        __atomic_store_n(&sBootAwaitLanguage, 1, __ATOMIC_RELEASE);
+        sLabelsThere = sLabelsOld = 0;
+        return; /* the native boot list uses the font, but the catalog waits for the choice */
+    }
+    if (sLabelDir[0] != '\0') {
+        char why[240];
+        if (!MenuTranslation_Load(sLabelDir, why, sizeof(why))) {
+            fprintf(stderr, "bt3: menu translation: %s\n", why);
+        }
+    }
     state = sLabelDir[0] != '\0' ? labels_state() : 0;
     MT_TRACE("Menu text: label folder checked");
     sLabelsThere = state == 1;
@@ -501,7 +574,7 @@ static void menu_text_fonts(void) {
     fonts_read();
     MT_TRACE("Menu text: font list read");
     for (i = 0; i < sFontCount; i++) { labels |= sFonts[i].uses[FONT_MENU] || sFonts[i].uses[FONT_BATTLE]; }
-    if (!sLabelsThere && sLabelDir[0] != '\0') {
+    if (!__atomic_load_n(&sBootAwaitLanguage, __ATOMIC_ACQUIRE) && !sLabelsThere && sLabelDir[0] != '\0') {
         if (labels) {
             MT_TRACE("Menu text: starting label generator");
             labels_start(); /* menu and battle fonts share the disc label catalog */
@@ -643,6 +716,17 @@ int MenuText_FontId(int choice) {
     return r;
 }
 
+int MenuText_FirstFontId(int setting) {
+    static const int roles[] = {FONT_MENU, FONT_DIALOGUE, FONT_BATTLE};
+    int i, id = 0;
+    if (setting < MENU_TEXT_MENU || setting > MENU_TEXT_BATTLE) return 0;
+    pthread_mutex_lock(&sLock);
+    menu_text_fonts();
+    for (i = 0; i < sFontCount; i++) if (sFonts[i].uses[roles[setting]]) { id = sFonts[i].id; break; }
+    pthread_mutex_unlock(&sLock);
+    return id;
+}
+
 static int font_by_id(int id) {
     int i;
     menu_text_fonts();
@@ -755,7 +839,9 @@ static void menu_text_labels(void) {
     while (sCount < MENU_TEXT_MAX && fgets(line, sizeof(line), fp) != NULL) {
         MenuLabel label;
         unsigned long long hash;
-        int pos = 0, i;
+        int pos = 0, end = 0, i, pieces, partIndex;
+        char id[64];
+        const char *translated, *original, *newline;
         size_t n;
         if (line[0] == '#') { continue; }
         memset(&label, 0, sizeof(label));
@@ -773,22 +859,47 @@ static void menu_text_labels(void) {
             label.depthMilli < 0 || label.depthMilli > 8000 || label.midGradient < 0 || label.midGradient > 1 ||
             label.fontFace < 0 || label.fontFace > 1 || label.hasMiddle < 0 || label.hasMiddle > 1 ||
             label.middleColor > 0xFFFFFF) { continue; }
-        n = strcspn(line + pos, "\r\n");
-        if (n == 0 || n >= sizeof(label.text) || (label.width < 8 || label.width > MENU_TEXT_WIDTH || (label.width & (label.width - 1))) || label.height < 1 || label.height > MENU_TEXT_HEIGHT ||
+        if (sscanf(line + pos, "%63[^\r\n]%n", id, &end) != 1 || end == 0 || strchr(id, '\t') != NULL ||
+            (line[pos + end] != '\n' && line[pos + end] != '\r' && line[pos + end] != '\0')) continue;
+        translated = MenuTranslation_Text(id);
+        original = MenuTranslation_Original(id);
+        if (translated == NULL || original == NULL || strlen(translated) >= sizeof(label.text) ||
+            strpbrk(translated, "\t\r") != NULL) continue;
+        newline = strchr(translated, '\n');
+        if (newline != NULL && (newline == translated || newline[1] == '\0' || strchr(newline + 1, '\n') != NULL)) continue;
+        pieces = newline != NULL ? 2 : 1;
+        n = strlen(translated);
+        if (n == 0 || (label.width < 8 || label.width > MENU_TEXT_WIDTH || (label.width & (label.width - 1))) || label.height < 1 || label.height > MENU_TEXT_HEIGHT ||
             label.y < 0 || label.rowHeight < 1 || label.rowHeight > 64 || label.y > label.height - label.rowHeight ||
             label.cap < 1 || label.cap > 64 || label.baseline < 0 ||
-            (label.baseline > label.rowHeight && !(label.rowHeight == 32 && label.rowWidth == 64 && label.baseline <= 64 && n == 3 && memcmp(line + pos, "\xE2\x88\x9E", 3) == 0)) ||
+            (label.baseline > label.rowHeight && !(label.rowHeight == 32 && label.rowWidth == 64 && label.baseline <= 64 && n == 3 && memcmp(translated, "\xE2\x88\x9E", 3) == 0)) ||
             label.widthMilli < 500 || label.widthMilli > 2000 || label.x < 0 || label.rowWidth < 1 || label.x > label.width - label.rowWidth ||
             label.artWidth < 0 || label.artWidth > label.rowWidth || label.margin < 0 || label.margin * 2 >= label.rowWidth || label.top > 0xFFFFFF || label.bottom > 0xFFFFFF || label.outline > 0xFFFFFF || label.italic < 0 || label.italic > 1) {
             continue;
         }
         for (i = 0; i < (int)n; i++) {
-            if ((unsigned char)line[pos + i] < 32) { break; }
+            if ((unsigned char)translated[i] < 32 && translated[i] != '\n') { break; }
         }
         if (i != (int)n) { continue; } /* no control characters silently dropped */
-        memcpy(label.text, line + pos, n);
         label.hash = (uint64_t)hash;
-        sLabels[sCount++] = label;
+        if (pieces == 2 && (label.rowHeight / 2 <= 8 || sCount + 2 > MENU_TEXT_MAX)) continue;
+        if (pieces == 1 && strcmp(translated, original) != 0) label.artWidth = 0;
+        for (partIndex = 0; partIndex < pieces; partIndex++) {
+            const char *part = partIndex == 0 ? translated : newline + 1;
+            size_t length = partIndex == 0 && newline != NULL ? (size_t)(newline - translated) : strlen(part);
+            MenuLabel drawn = label;
+            if (length == 0 || length >= sizeof(drawn.text)) break;
+            if (pieces == 2) {
+                drawn.y += partIndex * (label.rowHeight / 2);
+                drawn.rowHeight = label.rowHeight / 2;
+                if (drawn.cap > drawn.rowHeight - 8) drawn.cap = drawn.rowHeight - 8;
+                drawn.baseline = (drawn.rowHeight + drawn.cap) / 2;
+                drawn.artWidth = 0;
+            }
+            memcpy(drawn.text, part, length);
+            drawn.text[length] = '\0';
+            sLabels[sCount++] = drawn;
+        }
     }
     fclose(fp);
     for (i = 0; i < sCount; i++) {
@@ -922,7 +1033,7 @@ void MenuText_SetFontId(int id) {
     MT_TRACE("Menu text: resolving menu font");
     set_font(font_by_id(id));
     MT_TRACE("Menu text: menu font resolved");
-    sWantedId = sMake != 0 && sFontChoice == 0 ? id : 0;
+    sWantedId = (sMake != 0 || sBootAwaitLanguage) && sFontChoice == 0 ? id : 0;
     pthread_mutex_unlock(&sLock);
 }
 
@@ -1006,12 +1117,77 @@ int Port_MainItemLabel(int entry, int lit, int out) {
     return 1;
 }
 
+/* The European disc's menu art for the chosen language, if the setup took the European disc's archives
+   (gamedata/pzs3eu1): paired with the USA textures in a thread of its own, once. */
+static int sArtBank;
+static void *art_thread(void *arg) {
+    char why[240];
+    struct timespec a, b;
+    int n;
+    (void)arg;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    n = MenuLabels_Art(sDataDir, sArtBank, why, sizeof(why));
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    fprintf(stderr, n >= 0 ? "bt3: menu art: %s, %ld ms\n" : "bt3: menu art: not used: %s, %ld ms\n", why,
+            (long)((b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000));
+    return NULL;
+}
+
+static void art_start(void) {
+    static const char *const kBanks[4] = {"es", "de", "fr", "it"}; /* (the European disc's order, after English) */
+    static int started;
+    const char *locale;
+    char path[1100];
+    pthread_t th;
+    pthread_attr_t attr;
+    int k;
+
+    if (started || (locale = MenuTranslation_Locale()) == NULL) {
+        return;
+    }
+    started = 1;
+    for (k = 0; k < 4 && strcmp(locale, kBanks[k]) != 0; k++) {
+    }
+    snprintf(path, sizeof(path), "%s/pzs3eu1/00005.bin", sDataDir);
+    if (k == 4 || !file_there(path)) {
+        return;
+    }
+    sArtBank = k + 1;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&th, &attr, art_thread, NULL) != 0) {
+        art_thread(NULL);
+    }
+    pthread_attr_destroy(&attr);
+}
+
 void MenuText_Poll(void) {
+    if (__atomic_load_n(&sBootAwaitLanguage, __ATOMIC_ACQUIRE)) { return; }
+    art_start();
     item_start();
     if (sMake != 2) { return; }
     pthread_mutex_lock(&sLock);
     if (sMake == 2) { labels_take(); }
     pthread_mutex_unlock(&sLock);
+}
+
+void MenuText_BootLanguageChosen(void) {
+    int i, labels = 0;
+    pthread_mutex_lock(&sLock);
+    if (!__atomic_load_n(&sBootAwaitLanguage, __ATOMIC_ACQUIRE)) {
+        pthread_mutex_unlock(&sLock);
+        return;
+    }
+    menu_text_dirs(); /* the saved language now selects the catalog */
+    for (i = 0; i < sFontCount; i++) { labels |= sFonts[i].uses[FONT_MENU] || sFonts[i].uses[FONT_BATTLE]; }
+    if (!sLabelsThere && sLabelDir[0] != '\0') {
+        if (labels) labels_start();
+        else sLabelsThere = sLabelsOld;
+    }
+    __atomic_store_n(&sBootAwaitLanguage, 0, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&sLock);
+    MenuText_SetFontId(Port_Setting("menu_font_id", 0));
+    MenuText_SetBattleFontId(Port_Setting("battle_font_id", 0));
 }
 
 /* Decode strictly, skipping characters absent from the selected font. Malformed UTF-8 keeps the original row. */
@@ -1970,6 +2146,7 @@ static int line_choice(int kind) {
     int choice = kind == 0 ? sFontChoice : sSharedChoice, i;
     int role = kind == 0 ? FONT_MENU : FONT_DIALOGUE;
     menu_text_fonts();
+    if (kind == 0 && choice == 0 && sBootAwaitLanguage && sWantedId != 0) choice = font_by_id(sWantedId);
     if (choice > 0 && choice <= sFontCount && sFonts[choice - 1].uses[role]) { return choice; }
     for (i = 0; i < sFontCount; i++) {
         if (sFonts[i].uses[role]) { return i + 1; }

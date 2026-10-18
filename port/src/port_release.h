@@ -3,7 +3,7 @@
    releases older than the one its keeper names (port/matchmaking: the variable MIN_RELEASE). */
 #ifndef PORT_RELEASE_H
 #define PORT_RELEASE_H
-#define PORT_RELEASE 136
+#define PORT_RELEASE 137
 /* Where releases are published: the game asks GitHub for the newest one's number once per start (gs/net_match.c,
    "Check for updates") and opens this repository's release page from the settings window. A fork that publishes
    its own releases names its own repository here. */

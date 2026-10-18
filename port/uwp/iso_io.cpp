@@ -93,3 +93,14 @@ bool PortUwp_FileExists(const std::string &path) {
     return !name.empty() && GetFileAttributesExFromAppW(name.c_str(), GetFileExInfoStandard, &info) &&
         !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 }
+
+bool PortUwp_MoveFile(const std::string &source, const std::string &destination) {
+    const auto from = wide(source);
+    const auto to = wide(destination);
+    if (from.empty() || to.empty()) return false;
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    if (GetFileAttributesExFromAppW(to.c_str(), GetFileExInfoStandard, &info))
+        return ReplaceFileFromAppW(to.c_str(), from.c_str(), nullptr,
+                                   REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr);
+    return MoveFileFromAppW(from.c_str(), to.c_str());
+}

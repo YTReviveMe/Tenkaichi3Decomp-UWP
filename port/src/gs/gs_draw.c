@@ -25,6 +25,8 @@
 #include "ui.h"         /* PortVideo and the window helpers */
 #include "gs_texpack.h" /* texture packs (replacement textures) */
 #include "menu_text.h"  /* editable labels in the original menu texture slots */
+#include "menu_translation.h" /* optional language screen artwork */
+#include "menu_labels.h"      /* the chosen language's menu art from the European disc */
 #include <math.h>
 #ifdef BT3_UWP
 #define GS_MAX_SCALE 4
@@ -54,6 +56,28 @@ extern int Port_PageAspectMilli(void); /* plat_stub.c: the shape of the page sho
 extern int gPortMusicPercent, gPortSePercent, gPortVoicePercent, gPortStagePercent;
 
 static GsBackend *sBackend;
+
+/* The last picture again, with the overlay on it (Port_UiBanner, ui.cpp), and the window's events taken: for the
+   game's thread while it waits inside a blank (the start of an online match, gs/net.c), so that the window shows
+   something and does not look hung. The frame being recorded is set aside and left as it was for the blank's own
+   end. At most every 1/30 s. Nothing of the game's state is touched (the renderer's memory is not part of it). */
+void Gs_HoldFrame(void) {
+    static uint64_t last;
+    uint64_t now = SDL_GetTicksNS();
+    uint32_t draws = gsDrawCount, verts = gsVertCount, vuVerts = gsVuVertCount, vuIdx = gsVuIdxCount, vuUni = gsVuUniCount;
+
+    if (sBackend == NULL || now - last < 33000000ull) {
+        return;
+    }
+    last = now;
+    gsDrawCount = gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = 0;
+    sBackend->frameEnd();
+    gsDrawCount = draws;
+    gsVertCount = verts;
+    gsVuVertCount = vuVerts;
+    gsVuIdxCount = vuIdx;
+    gsVuUniCount = vuUni;
+}
 static int sSmooth2d = 1; /* the setting "2D filtering" (smooth_2d; BT3_2D_SMOOTH=0/1 wins): 1 smooth */
 static int sWholeFrame; /* the draw being set up shows a frame the game read back (the cross-fade) */
 
@@ -255,6 +279,8 @@ static const char *const kTboNames[TBO_ART_COUNT] = {TBO_ART_LIST(TBO_NAME)};
 #undef TBO_NAME
 static GsTex sTboTex[TBO_ART_COUNT];
 static unsigned char sTboMissing[TBO_ART_COUNT]; /* not found or not readable: not looked for again */
+static GsTex sLangTex[3];
+static unsigned char sLangMissing[3];
 
 /* Makes a texture of RGBA pixels (the GS's alpha) with its smaller copies, each half the one before, averaged by
    2 x 2: these pictures are mostly shown smaller than they are (letters, the crest), and one sample of the full
@@ -352,42 +378,52 @@ static GsTex tbo_text_texture(uint32_t id) {
 }
 
 static GsTex tbo_texture(uint32_t id) {
-    char path[1024];
+    char path[1024] = {0};
     SDL_Surface *png, *rgba;
     uint32_t *px, w, h, x, y;
     GsTex tex;
     const char *base;
+    GsTex *cached;
+    unsigned char *missing;
+    int languageArt = id >= TBO_LANG_BG && id <= TBO_LANG_ARROW_RIGHT;
 
     if (id >= TBO_TEXT_BASE && id < TBO_TEXT_BASE + TBO_TEXT_SLOTS) {
         return tbo_text_texture(id);
     }
-    if (id >= TBO_ART_COUNT || sTboMissing[id]) {
+    if (id >= TBO_ART_COUNT && !languageArt) {
         return gsWhite;
     }
-    if (sTboTex[id] != 0) {
-        return sTboTex[id];
+    cached = languageArt ? &sLangTex[id - TBO_LANG_BG] : &sTboTex[id];
+    missing = languageArt ? &sLangMissing[id - TBO_LANG_BG] : &sTboMissing[id];
+    if (*missing) return gsWhite;
+    if (*cached != 0) {
+        return *cached;
     }
     if (sBackend->texSlotsLeft() <= 0) {
         return gsWhite; /* (no room this frame: the next one tries again) */
     }
-    base = SDL_GetBasePath();
-    snprintf(path, sizeof(path), "%stbo/ui/%s.png", base != NULL ? base : "", kTboNames[id]);
-    png = SDL_LoadPNG(path);
-    if (png == NULL) {
-        snprintf(path, sizeof(path), "tbo/ui/%s.png", kTboNames[id]);
+    if (languageArt) {
+        png = MenuTranslation_ArtPath((int)id, path, sizeof(path)) ? SDL_LoadPNG(path) : NULL;
+    } else {
+        base = SDL_GetBasePath();
+        snprintf(path, sizeof(path), "%stbo/ui/%s.png", base != NULL ? base : "", kTboNames[id]);
         png = SDL_LoadPNG(path);
-    }
-    if (png == NULL) { /* a source checkout: the pictures where they are kept (port/tbo/ui) */
-        snprintf(path, sizeof(path), "port/tbo/ui/%s.png", kTboNames[id]);
-        png = SDL_LoadPNG(path);
+        if (png == NULL) {
+            snprintf(path, sizeof(path), "tbo/ui/%s.png", kTboNames[id]);
+            png = SDL_LoadPNG(path);
+        }
+        if (png == NULL) { /* a source checkout: the pictures where they are kept (port/tbo/ui) */
+            snprintf(path, sizeof(path), "port/tbo/ui/%s.png", kTboNames[id]);
+            png = SDL_LoadPNG(path);
+        }
     }
     rgba = png != NULL ? SDL_ConvertSurface(png, SDL_PIXELFORMAT_RGBA32) : NULL;
     if (png != NULL) {
         SDL_DestroySurface(png);
     }
     if (rgba == NULL) {
-        fprintf(stderr, "bt3: tbo: cannot read %s\n", path);
-        sTboMissing[id] = 1;
+        fprintf(stderr, "bt3: artwork: cannot read %s\n", path);
+        *missing = 1;
         return gsWhite;
     }
     w = (uint32_t)rgba->w;
@@ -397,7 +433,14 @@ static GsTex tbo_texture(uint32_t id) {
         const uint8_t *row = (const uint8_t *)rgba->pixels + (size_t)y * rgba->pitch;
         for (x = 0; x < w; x++) {
             const uint8_t *c = row + x * 4;
-            uint32_t a = ((uint32_t)c[3] * 128 + 127) / 255; /* the GS's alpha: 0x80 is opaque */
+            uint32_t imageAlpha = c[3];
+            uint32_t a;
+            /* These arrow PNGs use 127 for their solid pixels. Preserve the antialiased edge while
+               bringing the chevron itself up to full opacity over the green selection bar. */
+            if (languageArt && id != TBO_LANG_BG) {
+                imageAlpha = imageAlpha * 2 > 255 ? 255 : imageAlpha * 2;
+            }
+            a = (imageAlpha * 128 + 127) / 255; /* the GS's alpha: 0x80 is opaque */
             px[y * w + x] = (uint32_t)c[0] | ((uint32_t)c[1] << 8) | ((uint32_t)c[2] << 16) | (a << 24);
             /* the window: its inside is bands of two teals, which fall anywhere under the lines at the sizes it is
                drawn (src/menu/port_tbo.c, Tb_Panel). Every teal pixel is the darker one; the frame (grey, nearly
@@ -412,8 +455,8 @@ static GsTex tbo_texture(uint32_t id) {
     if (tex == 0) {
         return gsWhite;
     }
-    sTboTex[id] = tex;
-    fprintf(stderr, "bt3: tbo: %s (%ux%u)\n", kTboNames[id], (unsigned)w, (unsigned)h);
+    *cached = tex;
+    fprintf(stderr, "bt3: artwork: %s (%ux%u)\n", path, (unsigned)w, (unsigned)h);
     return tex;
 }
 
@@ -444,6 +487,7 @@ static GsTex texture_get(int ctx) {
     /* Font replacements follow their settings and resolution. A new label catalog also refreshes cached Battle
        texture identities when the artwork is still on "Original". */
     gen ^= MenuText_TexKey((int)tw, (int)th, bits <= 8, (int)tbp, (int)cbp, MenuText_RasterScale(SCALE));
+    gen ^= bits <= 8 ? MenuLabels_ArtKey() : 0; /* the chosen language's menu art ready: decoded again */
     if (sTexPackOn && TexPack_Count() != 0) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
     }
@@ -511,6 +555,9 @@ static GsTex texture_get(int ctx) {
                         above 0x80 matter: the see-through pass gives palettes alpha 0xF9 to write an id */
             px[y * tw + x] = c;
         }
+    }
+    if (px != NULL && !replaced && bits <= 8) {
+        MenuLabels_ArtSwap((unsigned char *)px, (int)tw, (int)th); /* the European picture, in the chosen language */
     }
     if (px != NULL) {
         battleText = MenuText_IsBattleTexture((const uint8_t *)px, (int)tw, (int)th, bits <= 8);
@@ -672,7 +719,11 @@ static GsTex clut_texture(uint32_t cbp) {
 /* ((A - B) * C >> 7) + D as the pipeline key's blend bits: ks * Cs + kd * Cd with ks, kd from
    {0, 1, C, -C, 1 - C, 1 + C}. Each of A, B, D is source, destination or zero, so bit i of A/B decides
    which side is scaled. Returns the key of pure GS state (bits 0..8); the back end turns it back into
-   blend factors. k[i]: 0 nothing, 1 one, 2 C, 3 -C, 4 1 - C, 5 1 + C; i = 0 source, 1 destination. */
+   blend factors. k[i]: 0 nothing, 1 one, 2 C, 3 -C, 4 1 - C, 5 1 + C; i = 0 source, 1 destination.
+   Bit 9: the source is scaled by its own alpha in the shader and blended with factor one. The GS takes a source
+   alpha above 0x80 as a factor above one (up to 255 / 128), but a blend factor is clamped at one by an 8-bit
+   target: an additive layer at alpha 0xFF (the blinding of a Solar Flare: grey 0x80 times 0xFF, white on the PS2)
+   was drawn at half. Done where only the source is scaled by As (the destination by nothing or one). */
 static uint32_t blend_key(uint64_t alpha, int abe) {
     int A = alpha & 3, B = (alpha >> 2) & 3, C = (alpha >> 4) & 3, D = (alpha >> 6) & 3, k[2], i;
 
@@ -683,12 +734,13 @@ static uint32_t blend_key(uint64_t alpha, int abe) {
         int c = (A == i) - (B == i), one = D == i;
         k[i] = c == 0 ? one : c > 0 ? (one ? 5 : 2) : (one ? 4 : 3);
     }
-    return 1u | (uint32_t)k[0] << 1 | (uint32_t)k[1] << 4 | (uint32_t)C << 7;
+    return 1u | (uint32_t)k[0] << 1 | (uint32_t)k[1] << 4 | (uint32_t)C << 7 |
+           (uint32_t)(C == 0 && (k[0] == 2 || k[0] == 3) && k[1] <= 1) << 9;
 }
 
 /* The pipeline a draw uses: everything a pipeline depends on is in the key (the back end makes and caches
    one pipeline per key, so this is pure GS state -> an index):
-   bits 0..8 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
+   bits 0..9 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
    20..21 vertices: 0 GS vertices, 1 program 0, 2 program 4, 3 program 6, 22 full-screen table pass,
    23 the fragment shader without its own depth output, 24 flat-shadow stencil mask. */
 static int pipeline_get(int ctx, int topo, int vu, int shadow) {

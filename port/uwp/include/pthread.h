@@ -65,5 +65,8 @@ static inline int pthread_join(pthread_t thread, void **value) {
     CloseHandle(thread);
     return status == WAIT_OBJECT_0 ? 0 : -1;
 }
+static inline int pthread_detach(pthread_t thread) {
+    return CloseHandle(thread) ? 0 : -1;
+}
 
 #endif

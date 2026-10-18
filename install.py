@@ -354,6 +354,21 @@ def step_build(args):
     return exe
 
 
+# ------------------------------------------------------------------------------------- (optional) European languages
+
+def step_eu(args):
+    """The European disc's archive entries the game makes Spanish, German, French and Italian from (port/tools/extract_eu.py,
+    as the setup window does in a release folder)."""
+    s = Step("European languages")
+    iso = pathlib.Path(args.eu_iso).expanduser()
+    if not iso.is_file():
+        s.fail(f"The European disc image was not found: {iso}")
+    code, out = run([sys.executable, ROOT / "port/tools/extract_eu.py", iso, "--data", ROOT / "gamedata"])
+    if code != 0:
+        s.fail((out.strip().splitlines() or ["The European disc image could not be read (see install.log)."])[-1].replace("extract_eu: ", ""))
+    s.ok("Spanish, German, French and Italian: the game makes them at its next start")
+
+
 # -------------------------------------------------------------------------------------------------- 6. self-test
 
 def step_test(args, exe):
@@ -394,6 +409,7 @@ def write_launcher(exe, bits32):
 def main():
     ap = argparse.ArgumentParser(description="Setup wizard of the Budokai Tenkaichi 3 PC port.", epilog="Run without arguments to be asked for the disc image.")
     ap.add_argument("--iso", help="your disc image of the USA release (SLUS-21678)")
+    ap.add_argument("--eu-iso", help="optional: a disc image of the European release (SLES-54945), for Spanish, German, French and Italian")
     ap.add_argument("--32", dest="bits32", action="store_true", help="make the 32-bit build instead of the 64-bit one")
     ap.add_argument("--check", action="store_true", help="only check the requirements")
     ap.add_argument("--rebuild", action="store_true", help="build again even if the program is there")
@@ -412,6 +428,8 @@ def main():
         print(f"\n  {BOLD('Budokai Tenkaichi 3 PC port')}  {DIM('setup')}\n")
     if args.check:
         Step.total = 1
+    elif args.eu_iso:
+        Step.total += 1
     t0 = time.time()
     try:
         step_requirements(args)
@@ -422,6 +440,8 @@ def main():
         step_gamedata(args, iso)
         step_split(args)
         exe = step_build(args)
+        if args.eu_iso:
+            step_eu(args)
         step_test(args, exe)
     except Failed as e:
         if MACHINE:

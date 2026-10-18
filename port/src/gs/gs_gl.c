@@ -476,7 +476,7 @@ static void scale_changed(void) {
 /* ---- pipelines ---------------------------------------------------------------------------------- */
 static void pipe_decode(Pipe *p, uint32_t key) {
     p->key = key;
-    p->bkey = key & 0x1FF;
+    p->bkey = key & 0x3FF;
     p->ztst = (int)((key >> 10) & 3);
     p->zwrite = (int)((key >> 12) & 1);
     p->topo = (int)((key >> 13) & 3);
@@ -521,6 +521,9 @@ static void apply_blend(uint32_t bkey) {
     if (!enabled) { return; }
     for (i = 0; i < 2; i++) {
         f[i] = k[i] == 0 ? GL_ZERO : k[i] == 1 || k[i] == 5 ? GL_ONE : k[i] == 4 ? fi : fc;
+    }
+    if (bkey & (1u << 9)) {
+        f[0] = GL_ONE; /* (the shader scaled the source by its alpha: gs_draw.c, blend_key) */
     }
     glBlendFuncSeparate(f[0], f[1], GL_ONE, GL_ZERO);
     glBlendEquationSeparate(k[0] == 3 ? GL_FUNC_REVERSE_SUBTRACT : k[1] == 3 ? GL_FUNC_SUBTRACT : GL_FUNC_ADD, GL_FUNC_ADD);
@@ -985,6 +988,7 @@ static void frame_end(void) {
         memcpy(fu.rect, d->rect, sizeof(fu.rect));
         memcpy(fu.orig, d->orig, sizeof(fu.orig));
         fu.extra[0] = d->vu ? (gsVuUni[d->uniform].misc[2] > 0.0f ? gsVuUni[d->uniform].misc[2] : 0.0f) : gsZMax;
+        fu.extra[1] = (sPipes[d->pipeline].key & (1u << 9)) ? 1.0f : 0.0f; /* the source scaled by its alpha */
         if (!haveFu || memcmp(&fu, &lastFu, sizeof(fu)) != 0) {
             set_params(&fu, sizeof(fu));
             memcpy(&lastFu, &fu, sizeof(fu));

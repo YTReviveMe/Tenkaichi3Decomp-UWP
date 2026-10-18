@@ -81,7 +81,8 @@ std::vector<std::string> PortUwp_ExternalRoots() {
     return std::async(std::launch::async, external_roots).get();
 }
 
-bool PortUwp_RunInstaller(const std::string &internal_root, std::string &installed_root) {
+bool PortUwp_RunInstaller(const std::string &internal_root, std::string &installed_root,
+                          const std::string &existing_root) {
     PortUwp_Trace("Starting BT3 ISO installer");
     SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *message) {
         PortUwp_Trace(message);
@@ -173,13 +174,16 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
     }
 
     const std::string internal_parent = with_slash(std::filesystem::path(internal_root).parent_path().string());
+    const bool add_languages = !existing_root.empty();
     std::string browse_path = internal_root, source_root = internal_parent;
-    std::string selected_iso, destination, status = "Choose an ISO of the unmodified USA release.";
+    std::string selected_iso, selected_eu, destination = existing_root;
+    std::string status = add_languages ? "Choose a European ISO (SLES-54945)." :
+                                         "Choose an ISO of the unmodified USA release.";
     std::vector<Entry> entries;
     std::vector<std::string> drives;
     std::future<Listing> pending;
     std::future<std::vector<std::string>> pending_drives;
-    bool first_focus = true, running = false, done = false, quit = false;
+    bool first_focus = true, running = false, done = false, quit = false, choosing_eu = add_languages;
     bool controller_present = false, controller_reported = false;
     auto browse = [&](std::string path) {
         if (pending.valid()) return;
@@ -187,6 +191,10 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         entries.clear();
         status = "Reading " + browse_path;
         pending = std::async(std::launch::async, list, browse_path);
+    };
+    auto clear_selected = [&] {
+        if (choosing_eu) selected_eu.clear();
+        else { selected_iso.clear(); destination.clear(); }
     };
     PortUwp_CreateDirectory(internal_root);
     browse(internal_root);
@@ -214,7 +222,8 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         if (pending.valid() && pending.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             auto listing = pending.get();
             entries = std::move(listing.entries);
-            status = listing.error.empty() ? (entries.empty() ? "No ISO found here. Browse another folder." : "Choose an ISO.") : listing.error;
+            status = listing.error.empty() ? (entries.empty() ? "No ISO found here. Browse another folder." :
+                            choosing_eu ? "Choose the European ISO." : "Choose the USA ISO.") : listing.error;
         }
         if (pending_drives.valid() && pending_drives.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             drives = pending_drives.get();
@@ -264,9 +273,12 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 320.0f);
         ImGui::TextColored(ImVec4(0.49f, 0.79f, 1.0f, 1.0f), "UWP port by: ReviveMe");
         ImGui::TextColored(ImVec4(0.59f, 0.76f, 0.91f, 1.0f),
-                           "SELECT GAME DISC  /  USA RELEASE  /  XBOX DEV MODE");
+                           add_languages ? "ADD EUROPEAN LANGUAGES  /  XBOX DEV MODE" :
+                                           "SELECT GAME DISC  /  XBOX DEV MODE");
         ImGui::Separator();
-        ImGui::TextWrapped("Choose where to find your ISO. Setup verifies the disc and extracts the game into the BT3 folder.");
+        ImGui::TextWrapped(add_languages ?
+            "Select your European disc image. The installed USA game stays in place." :
+            "Select the USA game disc. A European disc can optionally add Spanish, German, French and Italian.");
         ImGui::Spacing();
         ImGui::BeginDisabled(running);
         const float source_width = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
@@ -276,7 +288,7 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         if (ImGui::Button("INTERNAL  |  D:\\DevelopmentFiles\\BT3", ImVec2(source_width, 54))) {
             source_root = internal_parent;
             browse(internal_root);
-            selected_iso.clear();
+            clear_selected();
         }
         if (internal_selected) ImGui::PopStyleColor();
         if (first_focus) { ImGui::SetKeyboardFocusHere(-1); first_focus = false; }
@@ -289,7 +301,7 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
                 pending_drives = std::async(std::launch::async, external_roots);
                 status = "Searching for removable drives...";
             }
-            selected_iso.clear();
+            clear_selected();
         }
         if (!internal_selected) ImGui::PopStyleColor();
         if (!drives.empty()) {
@@ -297,7 +309,7 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
                 if (ImGui::Button(drive.c_str())) {
                     source_root = with_slash(drive);
                     browse(source_root);
-                    selected_iso.clear();
+                    clear_selected();
                 }
                 ImGui::SameLine();
             }
@@ -311,16 +323,28 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.60f, 0.80f, 0.96f, 1.0f), "CURRENT FOLDER");
         ImGui::TextWrapped("%s", browse_path.c_str());
-        ImGui::BeginChild("files", ImVec2(0, display.y * (drives.empty() ? 0.25f : 0.17f)),
+        if (!add_languages) {
+            if (ImGui::Button(choosing_eu ? "USA GAME ISO" : "USA GAME ISO  [SELECTED]", ImVec2(250, 42)))
+                choosing_eu = false;
+            ImGui::SameLine();
+            if (ImGui::Button(choosing_eu ? "EUROPEAN ISO  [SELECTED]" : "EUROPEAN ISO  [OPTIONAL]", ImVec2(300, 42)))
+                choosing_eu = true;
+        }
+        ImGui::BeginChild("files", ImVec2(0, display.y * (drives.empty() ? 0.19f : 0.12f)),
                           ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
         for (const auto &entry : entries) {
             if (ImGui::Selectable((std::string(entry.folder ? "[Folder] " : "[ISO] ") + entry.name).c_str())) {
                 if (entry.folder) browse(entry.path);
                 else {
-                    selected_iso = entry.path;
-                    destination = source_root == internal_parent ? internal_root :
-                        (std::filesystem::path(source_root) / "BT3").string();
-                    status = "Ready to extract to " + destination;
+                    if (choosing_eu) {
+                        selected_eu = entry.path;
+                        status = "European language disc selected.";
+                    } else {
+                        selected_iso = entry.path;
+                        destination = source_root == internal_parent ? internal_root :
+                            (std::filesystem::path(source_root) / "BT3").string();
+                        status = "Ready to extract to " + destination;
+                    }
                 }
                 break;
             }
@@ -330,13 +354,15 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         ImGui::TextColored(ImVec4(0.49f, 0.79f, 1.0f, 1.0f), "STATUS");
         ImGui::SameLine();
         ImGui::TextWrapped("%s", status.c_str());
-        if (!selected_iso.empty()) ImGui::TextWrapped("ISO: %s", selected_iso.c_str());
-        ImGui::BeginDisabled(selected_iso.empty() || running);
-        if (ImGui::Button("INSTALL AND PLAY", ImVec2(300, 56))) {
+        if (!selected_iso.empty()) ImGui::TextWrapped("USA: %s", selected_iso.c_str());
+        if (!selected_eu.empty()) ImGui::TextWrapped("European: %s", selected_eu.c_str());
+        ImGui::BeginDisabled((add_languages ? selected_eu.empty() : selected_iso.empty()) || running);
+        if (ImGui::Button(add_languages ? "ADD LANGUAGES AND PLAY" : "INSTALL AND PLAY", ImVec2(340, 56))) {
             PortUwp_CreateDirectory(destination);
-            Native_Start(with_slash(std::filesystem::path(destination).parent_path().string()), selected_iso);
+            Native_Start(with_slash(std::filesystem::path(destination).parent_path().string()),
+                         selected_iso, selected_eu);
             running = true;
-            status = "Verifying disc image...";
+            status = add_languages ? "Reading European disc..." : "Verifying disc image...";
         }
         ImGui::EndDisabled();
         ImGui::SameLine();

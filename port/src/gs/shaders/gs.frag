@@ -19,7 +19,8 @@ layout(set = 3, binding = 0) uniform Params {
     vec4 rect;   // textured from a frame buffer (mode.x == 2): the uv range that may be sampled
     vec4 orig;   // a texture pack's replacement: xy = the original texture's size (2D art, misc.w < 0);
                  // z = the original's largest alpha
-    vec4 extra;  // x: the depth buffer's largest value (0xFFFFFF for 24 bits)
+    vec4 extra;  // x: the depth buffer's largest value (0xFFFFFF for 24 bits); y: 1 = the colour is scaled by
+                 // its alpha here and blended with factor one (an alpha above 0x80: gs_draw.c, blend_key)
 } p;
 // 1.0 where v is not negative
 vec2 step2(vec2 v) { return vec2(v.x >= 0.0 ? 1.0 : 0.0, v.y >= 0.0 ? 1.0 : 0.0); }
@@ -138,6 +139,7 @@ void main() {
         gl_FragDepth = gl_FragCoord.z;
     }
 #endif
+    if (p.extra.y != 0.0) rgb *= a; // (the GS's factor As / 0x80, which goes up to 2: no blend factor does)
     outColor = vec4(clamp(rgb, 0.0, 1.0), clamp(a, 0.0, 1.0));
     float ab = clamp(a * 128.0 / 255.0, 0.0, 1.0);
     if (p.misc.z != 0.0) ab = (float(int(ab * 255.0 + 0.5) | 128)) / 255.0; // FBA

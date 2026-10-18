@@ -19,6 +19,7 @@
 #include "namefont.h"
 #include "../port_release.h"
 #include "menu_text.h"
+#include "menu_translation.h"
 #include "../quit_dialog.h"
 #include "net_chat.h"
 
@@ -29,6 +30,9 @@ static char sGpuName[256];
 
 extern "C" {
 extern volatile int gPortNetMenuRequest;
+#ifdef BT3_UWP
+int PortUwp_RequestLanguageSetup(void);
+#endif
 void Port_NetOptions(int rollback, int delay); // gs/net.c
 void Port_NetRulesSet(int type, int dp, int time); // gs/net.c: the host's battle type, DP limit row, time limit
 void Port_NetSpeedSet(int percent);                // ... and the match's speed, 100..200 (set before the rules)
@@ -91,6 +95,9 @@ void Port_LobbyCancel(void);
 void Port_LobbyLaunch(void);
 }
 static bool sReady, sOpen;
+static MenuTranslationOption sLanguages[256];
+static int sLanguageCount, sLanguageChoice;
+static bool sLanguageRestartPending;
 static bool sNet;                              // the open window is the online screen (Dragon Net Battle), not the settings
 #ifdef BT3_UWP
 static SDL_Window *sUiWindow;
@@ -458,6 +465,34 @@ static void style() {
     c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.03f);
 }
 
+static void language_init() {
+    const char *override = getenv("BT3_MENU_LANG");
+    char saved[16];
+    Port_SettingText("menu_lang", "", saved, sizeof(saved));
+    sLanguageCount = MenuTranslation_Available(sLanguages, (int)(sizeof(sLanguages) / sizeof(sLanguages[0])));
+    sLanguageChoice = 0;
+    const char *preferred = override != NULL && override[0] != '\0' ? override : saved[0] != '\0' ? saved : "en";
+    for (int i = 0; i < sLanguageCount; i++) if (strcmp(sLanguages[i].locale, preferred) == 0) sLanguageChoice = i;
+}
+
+extern "C" void Ui_LanguageChosen(const char *locale) {
+    if (locale == NULL) return;
+    for (int i = 0; i < sLanguageCount; i++) {
+        if (strcmp(sLanguages[i].locale, locale) == 0) {
+            sLanguageChoice = i;
+            sLanguageRestartPending = false;
+            break;
+        }
+    }
+}
+
+static void language_choose(int choice) {
+    if (choice < 0 || choice >= sLanguageCount) return;
+    MenuTranslation_SaveChoice(sLanguages[choice].locale);
+    sLanguageChoice = choice;
+    sLanguageRestartPending = true;
+}
+
 int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const char *gpu_name) {
     static const char *fonts[] = { // a proportional system font if there is one; else the library's built-in font
         "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -519,8 +554,9 @@ int Ui_Init(SDL_Window *window, SDL_GPUDevice *device, void *gl_context, const c
     ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll, NULL, 0); // any connected controller works the window
     sDevice = device;
     sReady = true;
+    language_init();
     load_strips(); /* the stage- and song-name overlays; the ready flags stay 0 if there is no strip */
-    if (getenv("BT3_UI_OPEN") != NULL) {
+    if (getenv("BT3_UI_OPEN") != NULL && !MenuTranslation_BootPending()) {
         sForceTab = atoi(getenv("BT3_UI_OPEN"));
         if (sForceTab == 9) { // testing: the online screen
             sForceTab = -1;
@@ -590,7 +626,8 @@ int Ui_QuitAsk(void) {
     sQuit = true;
     PortQuit_Request();
     input_owner();
-    PortA11y_Say(PortA11y_Label("Close the game? Progress that was not saved is lost."), 1);
+    const char *translated = MenuTranslation_PortText(PORT_TEXT_QUIT_CONFIRM);
+    PortA11y_Say(translated ? translated : PortA11y_Label("Close the game? Progress that was not saved is lost."), 1);
     say_quit_button(1, 0);
     PortA11y_Say(PortA11y_Label("Left and right choose, Enter confirms, Escape goes back to the game"), 0);
     return 1;
@@ -617,7 +654,8 @@ static void build_quit(void) {
     }
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Exit game", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
-        static const char *const kAsk = "Close the game? Progress that was not saved is lost.";
+        const char *translated = MenuTranslation_PortText(PORT_TEXT_QUIT_CONFIRM);
+        const char *kAsk = translated ? translated : "Close the game?\nUnsaved progress will be lost.";
         // the two buttons under the middle of the question (the window is as wide as its text)
         float line = ImGui::CalcTextSize(kAsk).x, pair = 140.0f * 2.0f + ImGui::GetStyle().ItemSpacing.x;
         ImGui::TextUnformatted(kAsk);
@@ -636,7 +674,7 @@ static void build_quit(void) {
         focus = ImGui::IsItemFocused() ? 1 : focus;
         if (ImGui::IsWindowAppearing()) {
             ImGui::SetItemDefaultFocus(); // (on Cancel: a second press of the same button does not close the game)
-            PortA11y_Say(PortA11y_Label(kAsk), 1);
+            PortA11y_Say(translated ? translated : PortA11y_Label("Close the game? Progress that was not saved is lost."), 1);
             say_quit_button(1, 0);
             PortA11y_Say(PortA11y_Label("Left and right choose, Enter confirms, Escape goes back to the game"), 0);
             said = 1;
@@ -1547,6 +1585,38 @@ static void misc_tab(void) {
 }
 
 static void ui_tab(PortVideo &v) {
+#ifdef BT3_UWP
+    static bool language_setup_ready;
+    if (ImGui::Button("Add European languages on next launch")) {
+        language_setup_ready = PortUwp_RequestLanguageSetup() != 0;
+    }
+    if (language_setup_ready)
+        ImGui::TextWrapped("Close and reopen the app to select your European disc image.");
+    ImGui::Separator();
+#endif
+    if (sLanguageCount > 0) {
+        bool overridden = getenv("BT3_MENU_LANG") != NULL && getenv("BT3_MENU_LANG")[0] != '\0';
+        ImGui::BeginDisabled(overridden || Port_NetActive());
+        if (ImGui::BeginCombo("Language", sLanguages[sLanguageChoice].name)) {
+            for (int i = 0; i < sLanguageCount; i++) {
+                if (ImGui::Selectable(sLanguages[i].name, i == sLanguageChoice) && i != sLanguageChoice) language_choose(i);
+                if (i == sLanguageChoice) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Game language based on available translations.");
+        bool alwaysPrompt = Port_Setting("language_prompt_always", 0) != 0;
+        if (ImGui::Checkbox("Show language selector at startup", &alwaysPrompt)) {
+            Port_SettingSave("language_prompt_always", alwaysPrompt);
+            Port_SettingsWrite();
+        }
+        ImGui::SetItemTooltip("Show the language list at every normal startup when more than one language is available.");
+        if (sLanguageRestartPending) {
+            ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.35f, 1.0f), "Language saved. It will apply on the next launch.");
+        }
+        ImGui::Separator();
+    }
     if (ImGui::BeginCombo("Menu font", MenuText_FontName(v.menuFont))) {
         for (int i = 0; i < MenuText_FontCount(); i++) {
             if (!MenuText_FontAvailable(i, MENU_TEXT_MENU)) { continue; }
@@ -1976,17 +2046,17 @@ static void build(void) {
                                       "counts as one of them while the clash lasts, as a tap of the d-pad does.\n"
                                       "It only changes your own pad, so it can be used in online play.");
                 if (cs) {
-                    static const int kQuarters[] = {4, 6, 7, 8};
-                    static const char *const kWorth[] = {"1", "1.5", "1.75", "2"};
-                    int at = 2;
-                    for (int i = 0; i < 4; i++) {
+                    static const int kQuarters[] = {4, 6, 7, 8, 9};
+                    static const char *const kWorth[] = {"1", "1.5", "1.75", "2", "2.25"};
+                    int at = 4;
+                    for (int i = 0; i < 5; i++) {
                         if (kQuarters[i] == Port_ClashSquareX()) {
                             at = i;
                         }
                     }
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(80.0f);
-                    if (ImGui::Combo("per press", &at, kWorth, 4)) {
+                    if (ImGui::Combo("per press", &at, kWorth, 5)) {
                         Port_ClashSquareXSet(kQuarters[at]);
                     }
                     ImGui::SetItemTooltip("What one press of Square is worth. The d-pad has four buttons to tap in turn and the\n"
@@ -2054,6 +2124,21 @@ static volatile int sNoticeNew;
 extern "C" void Port_UiNotice(const char *text) {
     SDL_strlcpy(sNotice, text != NULL ? text : "", sizeof(sNotice));
     sNoticeNew = 1;
+}
+
+// A line in the middle of the screen, the picture behind it dimmed, while the game's thread waits inside a blank
+// (the start of an online match, gs/net.c): drawn by the frames it shows meanwhile (Gs_HoldFrame). `ms` > 0: the
+// wait is over; the line stays that long more, over the game's own pictures and without the dimming. NULL: gone.
+static char sBanner[256];
+static Uint64 sBannerUntil; // 0: while the game waits
+extern "C" void Port_UiBanner(const char *text, int ms) {
+    if (text != NULL) {
+        SDL_strlcpy(sBanner, text, sizeof(sBanner));
+    }
+    if (text == NULL && ms <= 0) {
+        sBanner[0] = '\0';
+    }
+    sBannerUntil = ms > 0 ? SDL_GetTicks() + (Uint64)ms : 0;
 }
 
 // The meter: frames shown and the game's speed, and in an online match the connection. A setting (Video tab).
@@ -2420,9 +2505,13 @@ static bool frame_build(void) {
         chat_close();
     }
     bool chat = online && (sChat || chat_recent());
+    if (sBanner[0] != '\0' && sBannerUntil != 0 && SDL_GetTicks() >= sBannerUntil) {
+        sBanner[0] = '\0';
+    }
+    bool banner = sReady && sBanner[0] != '\0';
     meter_count();
     sBuilt = false;
-    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat)) {
+    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner)) {
         return false;
     }
     if (sPadHold && sCapKind != 2) { // a binding was taken: the controller works the window again once nothing is held
@@ -2511,6 +2600,28 @@ static bool frame_build(void) {
             }
             dl->AddText(font, size, ImVec2(x, y), IM_COL32(255, 255, 255, 255), text);
         }
+    }
+    if (banner) { // the start of an online match (Port_UiBanner): in the middle, large, outlined
+        ImGuiIO &io = ImGui::GetIO();
+        ImDrawList *dl = ImGui::GetForegroundDrawList();
+        ImFont *font = ImGui::GetFont();
+        float size = ImGui::GetFontSize() * (io.DisplaySize.y >= 900.0f ? 2.0f : 1.6f);
+        float wrap = io.DisplaySize.x * 0.8f;
+        ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, wrap, sBanner);
+        float x = (io.DisplaySize.x - extent.x) * 0.5f, y = (io.DisplaySize.y - extent.y) * 0.5f;
+        if (sBannerUntil == 0) { // still waiting: the picture dimmed
+            dl->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize, IM_COL32(0, 0, 0, 150));
+        }
+        dl->AddRectFilled(ImVec2(x - size, y - size * 0.6f), ImVec2(x + extent.x + size, y + extent.y + size * 0.6f), IM_COL32(10, 14, 40, 210),
+                          size * 0.4f);
+        for (int ox = -1; ox <= 1; ox++) {
+            for (int oy = -1; oy <= 1; oy++) {
+                if (ox != 0 || oy != 0) {
+                    dl->AddText(font, size, ImVec2(x + (float)ox * 2.0f, y + (float)oy * 2.0f), IM_COL32(0, 0, 0, 230), sBanner, NULL, wrap);
+                }
+            }
+        }
+        dl->AddText(font, size, ImVec2(x, y), IM_COL32(255, 236, 120, 255), sBanner, NULL, wrap);
     }
     if (notice) { // a line over the picture for a few seconds (the end of an online match)
         ImGuiIO &io = ImGui::GetIO();

@@ -5,3 +5,4 @@
 SDL_IOStream *PortUwp_OpenIO(const std::string &path, bool write);
 bool PortUwp_CreateDirectory(const std::string &path);
 bool PortUwp_FileExists(const std::string &path);
+bool PortUwp_MoveFile(const std::string &source, const std::string &destination);

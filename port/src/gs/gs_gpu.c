@@ -286,6 +286,9 @@ static void blend_from_key(uint32_t bkey, SDL_GPUColorTargetBlendState *b) {
     for (i = 0; i < 2; i++) {
         f[i] = k[i] == 0 ? SDL_GPU_BLENDFACTOR_ZERO : k[i] == 1 || k[i] == 5 ? SDL_GPU_BLENDFACTOR_ONE : k[i] == 4 ? fi : fc;
     }
+    if (bkey & (1u << 9)) {
+        f[0] = SDL_GPU_BLENDFACTOR_ONE; /* (the shader scaled the source by its alpha: gs_draw.c, blend_key) */
+    }
     b->enable_blend = true;
     b->src_color_blendfactor = f[0];
     b->dst_color_blendfactor = f[1];
@@ -296,7 +299,7 @@ static void blend_from_key(uint32_t bkey, SDL_GPUColorTargetBlendState *b) {
 }
 
 /* Creates the pipeline of a key (everything a pipeline depends on is in the key):
-   bits 0..8 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
+   bits 0..9 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
    20..21 vertices: 0 GS vertices, 1 program 0, 2 program 4, 3 program 6, 23 gs.frag without its depth output,
    24 the flat-shadow stencil test. */
 static int pipeline_create(uint32_t key, int remember) {
@@ -317,7 +320,7 @@ static int pipeline_create(uint32_t key, int remember) {
     SDL_zero(at);
     SDL_zero(cds);
     cds[0].format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    blend_from_key(key & 0x1FF, &cds[0].blend_state);
+    blend_from_key(key & 0x3FF, &cds[0].blend_state);
     cds[0].blend_state.color_write_mask = (SDL_GPUColorComponentFlags)wmask;
     cds[0].blend_state.enable_color_write_mask = true;
     vb.slot = 0;
@@ -1058,6 +1061,7 @@ static void vk_frame_end(void) {
         memcpy(fu.rect, d->rect, sizeof(fu.rect));
         memcpy(fu.orig, d->orig, sizeof(fu.orig));
         fu.extra[0] = d->vu ? (gsVuUni[d->uniform].misc[2] > 0.0f ? gsVuUni[d->uniform].misc[2] : 0.0f) : gsZMax;
+        fu.extra[1] = (sPipes[d->pipeline].key & (1u << 9)) ? 1.0f : 0.0f; /* the source scaled by its alpha */
         if (!haveFu || memcmp(&fu, &lastFu, sizeof(fu)) != 0) {
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
             memcpy(&lastFu, &fu, sizeof(fu));

@@ -2299,6 +2299,38 @@ of the file this copy found for that line (`adx_blanks` of `Port_FilePath`, wher
 - The connecting screen of pull request #40 was not taken: nothing here makes the wait before the two games
   start longer.
 
+
+## The pause before an online match (2026-10-17)
+
+Reported: when two players are paired, the picture stands still before the character select, longer the higher
+the ping ("at most 5 seconds at 50 ms"). Cause: the session's unseen start-up (1,753 blanks from the program's first
+blank to the character select, `Port_NetWarp`) went through the same exchange as play: every blank sent its input
+and waited for the other's, so it ran at a few blanks per round trip. Nobody plays those blanks; each player's pad
+was read and sent all the same.
+
+Now (gs/net.c `warp_tick`, `meet`; NET_VERSION 5) both copies give every start-up blank nothing pressed for both
+players and do not wait: they run the same blanks from the same first blank with the same input, at their own
+speed. The check values are still noted and sent (a packet a tenth of a second, which also keeps the line open).
+At the character select each copy says at which blank it arrived (`T_ARRIVED`; one that has arrived answers each
+such message once, so a lost packet costs a resend) and waits for the other's, up to a minute for a slow machine;
+two different blanks end the match as a desync. A copy of version 4 would wait for input that does not come: the
+versions do not match and the greeting says so.
+
+Measured: two copies over 127.0.0.1, `BT3_SESSION_TEST`, rollback 4, `BT3_NET_LATENCY` each way (the round trip is
+twice it). From the session asked for to both at the character select:
+
+| round trip | before (0.1.36's code) | now |
+|---|---|---|
+| 0 ms | 0.6 s | 0.6 s |
+| 50 ms | 6.8 s | 0.53 s |
+| 100 ms | 13 s | 0.62 s |
+| 200 ms | | 0.59 s |
+| 300 ms | | 0.77 s |
+
+(About 0.4 s of it is the host's measuring of the line before the session, the start-up itself 0.08 to 0.12 s.)
+Both copies arrive at blank 1754 in every run. A fight on a 100 ms line with both players' buttons from a table
+of random presses (`BT3_NET_SCRIPT`), 9,600 blanks: 30 to 40 rollbacks per 600 blanks, about 550 comparisons of the
+check values per 600 blanks, none different; and without rollback the same with about 618.
 ## Vibration, stick deadzones, and the sticks shown in Controls (2026-10-13)
 
 A player asked for "Vibration and Deadzone settings, with the analog sticks showing in Controls".
