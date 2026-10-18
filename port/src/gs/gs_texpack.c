@@ -197,6 +197,7 @@ void TexPack_Init(void) {
 #ifdef BT3_UWP
     struct stat info;
     ScanStats stats = {0};
+    uint64_t scan_start;
 #else
     SDL_PathInfo info;
 #endif
@@ -228,6 +229,7 @@ void TexPack_Init(void) {
         strcat(dir, "/");
     }
 #ifdef BT3_UWP
+    scan_start = SDL_GetTicksNS();
     walk_uwp(dir, 0, &stats);
 #else
     SDL_EnumerateDirectory(dir, walk, NULL);
@@ -238,7 +240,8 @@ void TexPack_Init(void) {
         char message[192];
         extern void PortUwp_Trace(const char *message);
         snprintf(message, sizeof(message),
-                 "Texture pack: scan complete (%u files; %u entries, %u folders, %u rejected, open error %u)",
+                 "Texture pack: scan complete in %.1f ms (%u files; %u entries, %u folders, %u rejected, open error %u)",
+                 (double)(SDL_GetTicksNS() - scan_start) / 1e6,
                  sCount, stats.entries, stats.folders, stats.rejected, stats.openError);
         PortUwp_Trace(message);
     }

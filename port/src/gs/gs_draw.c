@@ -138,6 +138,10 @@ unsigned gsSkipped;
 unsigned gGpuNewTex, gGpuNewTexPixels, gGpuNewPipes; /* created since the front end last cleared them (slow-frame report) */
 unsigned gGpuTexReplaced; /* textures taken from a texture pack so far */
 uint64_t gGpuTexNs, gGpuPipeNs, gGpuEndNs; /* time spent decoding textures, creating pipelines, in GsGpu_FrameEnd */
+#ifdef BT3_UWP
+uint64_t gGpuPackLookupNs, gGpuPackLoadNs, gGpuPackUploadNs, gGpuPackBytes;
+unsigned gGpuPackCacheHits, gGpuPackLoads, gGpuPackLoadFailures, gGpuPackEvictions;
+#endif
 
 static uint64_t gpu_now(void) {
     struct timespec ts;
@@ -161,6 +165,10 @@ static Tex sTex[MAX_TEX];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
 static Tex *sLast; /* the entry the previous lookup returned */
 static uint64_t sTexBytes;
+#ifdef BT3_UWP
+uint64_t GsDraw_TextureCacheBytes(void) { return sTexBytes; }
+int GsDraw_TexturePackEnabled(void) { return sTexPackOn; }
+#endif
 
 /* The 256-colour tables as textures, by hash of the palette entries they use (64 slots). */
 static struct { uint32_t hash, last; GsTex tex; } sCluts[MAX_CLUTS];
@@ -192,6 +200,9 @@ static void tex_compact(unsigned keep) {
             sTex[n++] = sTex[i];
         } else {
             sTexBytes -= sTex[i].bytes;
+#ifdef BT3_UWP
+            if (sTex[i].replaced == 1) gGpuPackEvictions++;
+#endif
             sBackend->texDestroy(sTex[i].tex);
         }
     }
@@ -237,6 +248,7 @@ static void tex_trim_bytes(uint64_t incoming, uint64_t limit) {
     for (n = 0, i = 0; i < gsTexCount; i++) {
         if (drop[i]) {
             sTexBytes -= sTex[i].bytes;
+            if (sTex[i].replaced == 1) gGpuPackEvictions++;
             sBackend->texDestroy(sTex[i].tex);
         } else {
             sTex[n++] = sTex[i];
@@ -472,6 +484,9 @@ static GsTex texture_get(int ctx) {
     TexPackImage pack;
     uint32_t packMaxAlpha = 255, rw = tw, rh = th;
     int packFormat = GS_TEXFMT_RGBA8, replaced = 0, menuText = 0, sharedText = 0, battleText = 0;
+#ifdef BT3_UWP
+    uint64_t packUploadStart = 0;
+#endif
 
     if (tw > 1024) { tw = 1024; }
     if (th > 1024) { th = 1024; }
@@ -493,6 +508,9 @@ static GsTex texture_get(int ctx) {
     }
     if (sLast != NULL && sLast->tex0 == t0 && sLast->texa == texa && sLast->gen == gen) {
         sLast->last = gGsFrame;
+#ifdef BT3_UWP
+        if (sLast->replaced == 1) gGpuPackCacheHits++;
+#endif
         return sLast->tex; /* the common case: the same texture as the previous primitive */
     }
     {
@@ -502,6 +520,9 @@ static GsTex texture_get(int ctx) {
             if (c->tex0 == t0 && c->texa == texa && c->gen == gen) {
                 c->last = gGsFrame;
                 sLast = c;
+#ifdef BT3_UWP
+                if (c->replaced == 1) gGpuPackCacheHits++;
+#endif
                 return c->tex;
             }
             h = (h + 1) & (TEX_BUCKETS - 1);
@@ -523,8 +544,19 @@ static GsTex texture_get(int ctx) {
     tex_t0 = gpu_now();
     /* a texture pack's replacement for this texture, if there is one (gs_texpack.c) */
     if (sTexPackOn && TexPack_Count() != 0) {
+#ifdef BT3_UWP
+        uint64_t pack_t0 = gpu_now();
+#endif
         const char *path = TexPack_Lookup(tbp, tbw, psm, tw, th, (uint32_t)((t0 >> 34) & 1), cbp, cpsm, &packMaxAlpha);
+#ifdef BT3_UWP
+        gGpuPackLookupNs += gpu_now() - pack_t0;
+        if (path != NULL) pack_t0 = gpu_now();
+#endif
         if (path != NULL && TexPack_Load(path, &pack)) {
+#ifdef BT3_UWP
+            gGpuPackLoadNs += gpu_now() - pack_t0;
+            gGpuPackLoads++;
+#endif
             packFormat = pack.format & 3;
             if (sBackend->texSlotsLeft() >= pack.levels) {
                 replaced = 1;
@@ -534,6 +566,11 @@ static GsTex texture_get(int ctx) {
             } else {
                 TexPack_Free(&pack);
             }
+#ifdef BT3_UWP
+        } else if (path != NULL) {
+            gGpuPackLoadNs += gpu_now() - pack_t0;
+            gGpuPackLoadFailures++;
+#endif
         }
     }
     /* A texture pack still uses the game's source pixels to identify Battle text for widescreen geometry. */
@@ -599,6 +636,9 @@ static GsTex texture_get(int ctx) {
     }
 #endif
     t = &sTex[gsTexCount];
+#ifdef BT3_UWP
+    if (replaced) packUploadStart = gpu_now();
+#endif
     t->tex = replaced ? sBackend->texCreate(rw, rh, packFormat, pack.levels) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {
         free(px);
@@ -626,7 +666,13 @@ static GsTex texture_get(int ctx) {
         for (level = 0; level < pack.levels; level++) {
             uint32_t lw = pack.w >> level ? pack.w >> level : 1, lh = pack.h >> level ? pack.h >> level : 1;
             sBackend->texUpload(t->tex, level, lw, lh, packFormat, copies[level], pack.bytes[level]);
+#ifdef BT3_UWP
+            gGpuPackBytes += pack.bytes[level];
+#endif
         }
+#ifdef BT3_UWP
+        gGpuPackUploadNs += gpu_now() - packUploadStart;
+#endif
         TexPack_Free(&pack);
     } else {
         if (getenv("BT3_TEX_DUMP") != NULL) { /* every texture as it is decoded, raw RGBA with a small header (looking at the game's art) */

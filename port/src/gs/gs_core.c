@@ -1306,6 +1306,10 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     static uint64_t next, start, sum, worst, sumGame, sumList, sumTex, sumPipe, sumEnd, perMin = ~0ull, perMax;
     static unsigned n, over;
     uint64_t t, tChain;
+#ifdef BT3_UWP
+    static uint64_t sumRenderWait;
+    uint64_t renderWait = 0;
+#endif
 
     if (!gs_on()) {
         return;
@@ -1317,6 +1321,9 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     tChain = now_ns();
     if (sThreaded) {
         render_wait(); /* the previous list must be finished before this one starts (the PS2's sceGsSyncPath) */
+#ifdef BT3_UWP
+        renderWait = now_ns() - tChain;
+#endif
     } else {
         run_chain(tadr, tte);
     }
@@ -1343,6 +1350,9 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
             sumTex += gGpuTexNs;
             sumPipe += gGpuPipeNs;
             sumEnd += gGpuEndNs;
+#ifdef BT3_UWP
+            sumRenderWait += renderWait;
+#endif
             gGpuNewTex = gGpuNewTexPixels = gGpuNewPipes = 0;
             gGpuTexNs = gGpuPipeNs = gGpuEndNs = 0;
         }
@@ -1358,18 +1368,32 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
 #ifdef BT3_UWP
             static unsigned lastReplaced;
             extern unsigned gGpuTexReplaced;
+            extern uint64_t gGpuPackLookupNs, gGpuPackLoadNs, gGpuPackUploadNs, gGpuPackBytes;
+            extern unsigned gGpuPackCacheHits, gGpuPackLoads, gGpuPackLoadFailures, gGpuPackEvictions;
+            extern uint64_t GsDraw_TextureCacheBytes(void);
+            extern int GsDraw_TexturePackEnabled(void);
+            extern int gsTexCount;
             unsigned replacements = gGpuTexReplaced - lastReplaced;
             lastReplaced = gGpuTexReplaced;
-            if (over != 0 && TexPack_Count() != 0) {
-                char message[192];
+            if (TexPack_Count() != 0) {
+                char message[256];
                 snprintf(message, sizeof(message),
-                         "Texture perf: avg %.1f ms, worst %.1f ms, %u/60 slow; game %.1f ms, list %.1f ms, decode %.1f ms, submit %.1f ms; %u replacements",
+                         "Texture perf frame %u pack %s: avg %.1f ms, worst %.1f ms, %u/60 over 33 ms; game %.1f, render wait %.1f, list %.1f, decode %.1f, submit %.1f ms",
+                         sFrame, GsDraw_TexturePackEnabled() ? "on" : "off",
                          (double)sum / 60e6, (double)worst / 1e6, over,
-                         (double)sumGame / 60e6, (double)sumList / 60e6,
-                         (double)sumTex / 60e6, (double)sumEnd / 60e6,
-                         replacements);
+                         (double)sumGame / 60e6, (double)sumRenderWait / 60e6,
+                         (double)(sumList - sumRenderWait) / 60e6, (double)sumTex / 60e6, (double)sumEnd / 60e6);
+                PortUwp_Trace(message);
+                snprintf(message, sizeof(message),
+                         "Texture pack: %u new, %u loads, %u failed, %u cached, %u evicted; lookup %.1f, file/decode %.1f, upload prep %.1f ms; %.1f MiB uploaded, cache %.1f MiB (%d entries)",
+                         replacements, gGpuPackLoads, gGpuPackLoadFailures, gGpuPackCacheHits, gGpuPackEvictions,
+                         (double)gGpuPackLookupNs / 1e6, (double)gGpuPackLoadNs / 1e6, (double)gGpuPackUploadNs / 1e6,
+                         (double)gGpuPackBytes / 1048576.0, (double)GsDraw_TextureCacheBytes() / 1048576.0, gsTexCount);
                 PortUwp_Trace(message);
             }
+            gGpuPackLookupNs = gGpuPackLoadNs = gGpuPackUploadNs = gGpuPackBytes = 0;
+            gGpuPackCacheHits = gGpuPackLoads = gGpuPackLoadFailures = gGpuPackEvictions = 0;
+            sumRenderWait = 0;
 #endif
             if (getenv("BT3_GS_VERBOSE") != NULL) {
                 fprintf(stderr, "time: frame %u: work per frame: average %.1f ms, worst %.1f ms, %u of 60 over the 33.4 ms budget\n",
