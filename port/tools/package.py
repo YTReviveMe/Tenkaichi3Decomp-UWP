@@ -86,17 +86,15 @@ Added stages are not written to your save, and they are not offered in an online
 
 SONGS_NOTE = """Music from outside the disc.
 
-Put a song as an .mp3 or an .adx file (CRI ADX, the game's own music format) into this folder. It is added to the
-music choice of the stage select, before "Random", named after the file. Up to 40 songs. An .mp3 is converted to
-.adx when the game starts, once (the .adx is written next to it, while the game is already running: a new song may
-be missing from the first select screen and is there from the next one on). An .mp3 that is replaced by another is
-converted again. An .adx you made yourself is never replaced: an .mp3 of the same name beside it is left alone. An
-.mp3 that cannot be read is left out, with a notice, and noted in mp3-failed.txt here; it is tried again when the
-file changes. Other formats have to be converted first (ffmpeg can write ADX: ffmpeg -i song.ogg -ar 24000 -ac 2
--c:a adpcm_adx song.adx).
+Put a song as an .mp3, .wav, .flac or .adx file (ADX is the game's own music format) into this folder. It is added
+to the music choice of the stage select, before "Random", named after the file. Up to 40 songs. An .mp3, .wav or
+.flac is played as it is (miniaudio decodes it; there is no conversion pass and no .adx written next to it), so a
+new song is in the list from the next start. An .adx is played by the game's own decoder. A file that cannot be
+read stays in the list and is silent (the log says why). An .adx that an earlier version wrote next to an .mp3 is
+not listed while the .mp3 is there (it can be deleted). Anything else (ogg, m4a...) has to be converted first
+(ffmpeg can write the formats above, or ADX: ffmpeg -i song.ogg -ar 24000 -ac 2 -c:a adpcm_adx song.adx).
 
-Optional: a file songs.txt here, one line per song, "file.adx|Name In The Menu" (or the .mp3), gives other names
-and an order.
+Optional: a file songs.txt here, one line per song, "file|Name In The Menu", gives other names and an order.
 
 Added songs are not written to your save, and they are not offered in an online match (Dragon Net Battle).
 """
@@ -225,7 +223,7 @@ def main_win():
     shutil.copy2(ROOT / "port/third_party/imgui/LICENSE.txt", lic / "dear-imgui.txt")
     shutil.copy2(ROOT / "port/third_party/newlib_libm/COPYING.NEWLIB", lic / "newlib.txt")
     shutil.copy2(ROOT / "port/third_party/xxhash/LICENSE", lic / "xxhash.txt")
-    shutil.copy2(ROOT / "port/third_party/dr_libs/LICENSE", lic / "dr_mp3.txt")
+    shutil.copy2(ROOT / "port/third_party/miniaudio/LICENSE", lic / "miniaudio.txt")
 
     take_fonts(out, lic)
     take_tbo_art(out, lic)
@@ -273,7 +271,7 @@ def main():
     shutil.copy2(ROOT / "port/third_party/imgui/LICENSE.txt", lic / "dear-imgui.txt")
     shutil.copy2(ROOT / "port/third_party/newlib_libm/COPYING.NEWLIB", lic / "newlib.txt")
     shutil.copy2(ROOT / "port/third_party/xxhash/LICENSE", lic / "xxhash.txt")
-    shutil.copy2(ROOT / "port/third_party/dr_libs/LICENSE", lic / "dr_mp3.txt")
+    shutil.copy2(ROOT / "port/third_party/miniaudio/LICENSE", lic / "miniaudio.txt")
 
     take_fonts(OUT, lic)
     take_tbo_art(OUT, lic)

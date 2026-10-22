@@ -8,7 +8,7 @@
  * offers only "Original", and a font the settings ask for is taken into use when it is (MenuText_Poll, which the
  * renderer calls between two frames). In a run whose buttons are recorded or played back, or that is re-run
  * blank by blank (BT3_PAD_REC, BT3_PAD_PLAY, BT3_PAD_TABLE, BT3_SYNCTEST), it is made at start before anything is
- * drawn, as song_mp3.c converts its songs then: the pictures of such a run do not depend on how fast it was.
+ * drawn: the pictures of such a run do not depend on how fast it was.
  * "Dialogue / UI font": the glyph cells of the game's own font sheets (Font_Print) are drawn again from the font.
  * "Battle font": the battle announcement textures keep their original artwork or use the typeface marked for
  * battle in fonts.tsv, independently of the Menu font.

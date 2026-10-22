@@ -138,7 +138,6 @@ finished program fetches the values from your disc when it starts.
 | `port/third_party/` | Dear ImGui (MIT), the maths library of newlib |
 | `docs/` | Notes on the game (from the decompilation) and `docs/port/` on the port |
 
-This project was made with the help of AI.
 
 ## Contributors
 

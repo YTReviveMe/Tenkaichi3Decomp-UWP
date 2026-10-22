@@ -111,6 +111,10 @@ extern EftDelaySeMgr *gEftDelaySe;
 extern EftCharSlots *gEftCharSlot;
 extern EftBladeMgr *gEftBlade;
 extern EftBlind *gEftBlind;
+#ifdef PORT
+extern int Port_NetView(void);          /* port/src/gs/net.c: the local player's view (0 or 1) when online, or -1 */
+extern s32 BtlCam_GetPriorityView(void);
+#endif
 extern void *gEftAnimPartList;
 extern EftAaOrbTailMgr *gEftOrbTail;
 
@@ -1314,6 +1318,15 @@ void EftBlind_Draw(void) {
     }
     if (Battle_IsSplitScreen()) {
         if (BtlScene_IsSingleView()) {
+#ifdef PORT
+            /* Online play shows the local player's view of the two-player game full screen (see
+               BtlScene_IsCharInView): the game's "one view", where it draws no overlay, so a blinded player saw
+               only the flash of the technique and none of the second or two of fading grey. Here: that player's
+               own overlay over the whole screen, as in a one-player battle. Drawing only. */
+            if (Port_NetView() >= 0 && BtlCam_GetPriorityView() < 0 && (gEftBlind->flags & (Port_NetView() == 0 ? EFT_BLIND_SHOW0 : EFT_BLIND_SHOW1))) {
+                EftBlind_DrawOverlay(0, 1, gEftBlind->alpha[Port_NetView()]);
+            }
+#endif
             return;
         }
         if (gEftBlind->flags & EFT_BLIND_SHOW0) {

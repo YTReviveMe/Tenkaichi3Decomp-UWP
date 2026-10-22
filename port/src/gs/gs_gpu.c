@@ -18,6 +18,7 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include "gs_internal.h"
 #include "gs_draw.h"
@@ -38,7 +39,7 @@ static SDL_Window *sWindow; /* the shared window (GsDraw_WindowCreate) */
 static SDL_GPUDevice *sDev;
 static SDL_GPUTextureFormat sDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 static int sShadowStencil;
-static SDL_GPUShader *sVs, *sFs, *sFsNz; /* (Nz: gs.frag without its depth output, key bit 23) */
+static SDL_GPUShader *sVs, *sFs, *sFsNz, *sFsWb; /* (Nz: gs.frag without its depth output, key bit 23; Wb: and with the glow chain's sampling, bit 25) */
 static SDL_GPUBuffer *sVbuf;
 static SDL_GPUTransferBuffer *sVxfer;
 static SDL_GPUSampler *sSamplers[16]; /* bit 0 filtered, bit 1 / 2 clamped in u / v, bit 3 with the smaller copies (mip levels) */
@@ -59,6 +60,7 @@ static SDL_GPUShader *sVu0Vs, *sVu4Vs, *sVu6Vs;
 typedef struct Pipe {
     uint32_t key;
     SDL_GPUGraphicsPipeline *p;
+    int noAux; /* 1 + the index of the same pipeline without the alpha byte (key bit 26), 0 = not looked up yet */
 } Pipe;
 static Pipe sPipes[1024];
 static int sPipeCount;
@@ -301,7 +303,7 @@ static void blend_from_key(uint32_t bkey, SDL_GPUColorTargetBlendState *b) {
 /* Creates the pipeline of a key (everything a pipeline depends on is in the key):
    bits 0..9 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
    20..21 vertices: 0 GS vertices, 1 program 0, 2 program 4, 3 program 6, 23 gs.frag without its depth output,
-   24 the flat-shadow stencil test. */
+   24 the flat-shadow stencil test, 25 gswb.frag, 26 the alpha byte left alone (aux_plan). */
 static int pipeline_create(uint32_t key, int remember) {
     int ztst = (int)((key >> 10) & 3), zwrite = (int)((key >> 12) & 1), topo = (int)((key >> 13) & 3), vu = (int)((key >> 20) & 3);
     int fx = (int)((key >> 22) & 1); /* a full-screen table pass (dclut.frag): no vertices, no depth attachment */
@@ -336,7 +338,7 @@ static int pipeline_create(uint32_t key, int remember) {
         at[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4; at[2].offset = 32;
     }
     ci.vertex_shader = vu == 3 ? sVu6Vs : vu == 2 ? sVu4Vs : vu ? sVu0Vs : sVs;
-    ci.fragment_shader = (key >> 23) & 1 ? sFsNz : sFs;
+    ci.fragment_shader = (key >> 25) & 1 ? sFsWb : (key >> 23) & 1 ? sFsNz : sFs;
     ci.vertex_input_state.vertex_buffer_descriptions = &vb;
     ci.vertex_input_state.num_vertex_buffers = 1;
     ci.vertex_input_state.vertex_attributes = at;
@@ -363,7 +365,7 @@ static int pipeline_create(uint32_t key, int remember) {
     }
     /* the exact alpha byte: never blended, written whenever the frame's alpha is writable */
     cds[1].format = SDL_GPU_TEXTUREFORMAT_R8_UNORM;
-    cds[1].blend_state.color_write_mask = (wmask & SDL_GPU_COLORCOMPONENT_A) ? SDL_GPU_COLORCOMPONENT_R : 0;
+    cds[1].blend_state.color_write_mask = (wmask & SDL_GPU_COLORCOMPONENT_A) && !(key & (1u << 26)) ? SDL_GPU_COLORCOMPONENT_R : 0;
     cds[1].blend_state.enable_color_write_mask = true;
     ci.target_info.color_target_descriptions = cds;
     ci.target_info.num_color_targets = 2;
@@ -509,7 +511,8 @@ static int vk_init(void) {
     sVs = shader(SHADER_CODE(kGsVert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     sFs = shader(SHADER_CODE(kGsFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
     sFsNz = shader(SHADER_CODE(kGsnzFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
-    if (sVs == NULL || sFs == NULL || sFsNz == NULL) {
+    sFsWb = shader(SHADER_CODE(kGswbFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
+    if (sVs == NULL || sFs == NULL || sFsNz == NULL || sFsWb == NULL) {
         fprintf(stderr, "bt3: shaders: %s\n", SDL_GetError());
         return 0;
     }
@@ -634,6 +637,195 @@ static int vk_init(void) {
 
 /* --- the frame ---------------------------------------------------------------------------------- */
 
+/* The frame's clear, as the game draws it: an untextured, unblended black rectangle over the whole of its scissor,
+   written whatever the depth test, at one depth (the first draw of a fight's picture: two triangles at the depth
+   just above the farthest). Drawn, it is a pass of colour, alpha byte and depth over the whole picture through the
+   shader that writes its own depth (8% of a fight frame on an integrated chip at 2x); the same values cleared by the
+   render pass cost next to nothing. `depth`: what gs.frag would have written (its rounding to the depth buffer's
+   whole numbers, worked out the same way). The whole texture is cleared, not only the scissor: nothing of a
+   picture lies outside it (every draw on it is held inside), and outside it only the depth differs, which nothing
+   reads. BT3_FAST_CLEAR=0: drawn as before. */
+static int clear_draw(const GsDraw *d, float *depth) {
+    static int on = -1;
+    uint32_t key, j;
+    const Vtx *v;
+    float x0, y0, x1, y1, z;
+
+    if (on < 0) { on = getenv("BT3_FAST_CLEAR") != NULL ? atoi(getenv("BT3_FAST_CLEAR")) : 1; }
+    if (!on || d->native || d->vu || d->wall || d->mode[0] != 0 || d->mode[3] != 0 || d->misc[1] != 0.0f || d->misc[2] != 0.0f ||
+        d->count != 6 || d->scissor[0] != 0 || d->scissor[1] != 0) {
+        return 0;
+    }
+    key = sPipes[d->pipeline].key;
+    /* no blending, depth test "always" (1), depth written, all four channels, GS vertices, no stencil */
+    if ((key & 0x3FFu) != 0 || ((key >> 10) & 3) != 1 || !((key >> 12) & 1) || ((key >> 16) & 0xF) != 0xF || ((key >> 20) & 3) != 0 ||
+        (key & (1u << 24)) != 0) {
+        return 0;
+    }
+    v = &gsVerts[d->first];
+    z = v[0].z;
+    x0 = y0 = 1e9f;
+    x1 = y1 = -1e9f;
+    for (j = 0; j < 6; j++) {
+        if (v[j].r != 0 || v[j].g != 0 || v[j].b != 0 || v[j].a != 0 || v[j].z != z) {
+            return 0;
+        }
+        if (v[j].x < x0) { x0 = v[j].x; }
+        if (v[j].x > x1) { x1 = v[j].x; }
+        if (v[j].y < y0) { y0 = v[j].y; }
+        if (v[j].y > y1) { y1 = v[j].y; }
+    }
+    /* the two triangles of the rectangle (0,0)..(x1,y1), and that rectangle is the scissor and the whole screen at
+       least (a view of the split screen clears its half: a clear of the texture would take the other half too) */
+    if (x0 != 0.0f || y0 != 0.0f || x1 < 512.0f || y1 < 448.0f ||
+        x1 * (float)SCALE != (float)d->scissor[2] || y1 * (float)SCALE != (float)d->scissor[3] ||
+        !(v[0].x != v[1].x || v[0].y != v[1].y) || (v[0].x == v[1].x && v[1].x == v[2].x) || (v[3].x == v[4].x && v[4].x == v[5].x)) {
+        return 0;
+    }
+    {   /* the area of the two triangles together is the rectangle's: they do not overlap and leave nothing out */
+        float a = 0.0f;
+        int t;
+        for (t = 0; t < 2; t++) {
+            const Vtx *p = &v[t * 3];
+            a += fabsf((p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y)) * 0.5f;
+        }
+        if (a != x1 * y1) {
+            return 0;
+        }
+    }
+    if (gsZMax > 0.0f && gsZMax < 2.0e7f) { /* (gs.frag, its end) */
+        float zn = floorf(z * gsZMax), zq = zn / gsZMax;
+        *depth = zq > z ? (zn - 1.0f) / gsZMax : zq;
+    } else {
+        *depth = z;
+    }
+    return 1;
+}
+
+/* The part of the alpha bytes that copy `k` (a native 4) has to hold: what the passes reading the copy (the table
+   passes, the outline and the see-through tint) read before the next copy is taken. Each of them draws inside its
+   scissor and reads its own place, the outline also up to 8 texels across and one PS2 pixel up and down: the
+   scissors together, with that much more on every side. The whole buffer was copied, 2048 x 2048 at 2x, for a
+   picture of 1024 x 896. 0 = no pass reads it: then the whole buffer, as before (BT3_AUX_COPY_WHOLE=1: always). */
+static int aux_region(uint32_t k, int *rx, int *ry, int *rw, int *rh) {
+    static int whole = -1;
+    int W = GS_W * SCALE, H = GS_H * SCALE, m = 8 + 2 * SCALE, x0 = W, y0 = H, x1 = 0, y1 = 0, any = 0;
+    uint32_t i;
+
+    if (whole < 0) { whole = getenv("BT3_AUX_COPY_WHOLE") != NULL; }
+    for (i = k + 1; !whole && i < gsDrawCount && gsDraws[i].native != 4; i++) {
+        const GsDraw *d = &gsDraws[i];
+        if (d->native == 3 || d->native == 1 || d->native == 2) {
+            if (d->scissor[0] < x0) { x0 = d->scissor[0]; }
+            if (d->scissor[1] < y0) { y0 = d->scissor[1]; }
+            if (d->scissor[0] + d->scissor[2] > x1) { x1 = d->scissor[0] + d->scissor[2]; }
+            if (d->scissor[1] + d->scissor[3] > y1) { y1 = d->scissor[1] + d->scissor[3]; }
+            any = 1;
+        }
+    }
+    if (whole || !any) {
+        return 0;
+    }
+    x0 = x0 - m < 0 ? 0 : x0 - m;
+    y0 = y0 - m < 0 ? 0 : y0 - m;
+    x1 = x1 + m > W ? W : x1 + m;
+    y1 = y1 + m > H ? H : y1 + m;
+    if (x1 <= x0 || y1 <= y0) {
+        return 0;
+    }
+    *rx = x0, *ry = y0, *rw = x1 - x0, *rh = y1 - y0;
+    return 1;
+}
+
+/* Where each draw's alpha bytes are read again (aux_plan). A draw writes them as the GS does, into their own
+   buffer next to the colour (sTgAux); they are read only by the copies a native 4 (for the outline and the
+   see-through tint) and a native 5 (the destination alpha test) take, each of a known part of the buffer
+   (aux_region, GsDraw_DateRegion). Past the last copy that covers a place, what a draw writes there is never
+   read: the next frame of that buffer begins with its clear. An ultimate's flash, its rays and the aura's
+   glow are drawn there, after the last copy of the whole screen (only the HUD's bars are tested later): some
+   fifty additive layers over the whole picture in the heaviest frames, each pixel of them read and written
+   again, the byte with it. So those draws, or the parts of them outside the places still read, are drawn with
+   a pipeline that leaves the byte alone (key bit 26). The picture is the same. sAuxNeed: the rectangle (at
+   SCALE) of each draw where its byte is read later, empty when nowhere. BT3_AUX_ALL=1: every draw writes it. */
+static int16_t sAuxNeed[MAX_DRAWS][4];
+static uint8_t sAuxBegan[MAX_TARGETS]; /* the previous frame of the buffer began with the clear */
+static int aux_plan_on(void) { static int on = -1; if (on < 0) { on = getenv("BT3_AUX_ALL") == NULL; } return on; }
+static void aux_plan(void) {
+    int W = GS_W * SCALE, H = GS_H * SCALE, u[MAX_TARGETS][4], first[MAX_TARGETS], t;
+    float z;
+    uint32_t i;
+
+    for (t = 0; t < MAX_TARGETS; t++) { first[t] = -1, u[t][0] = 0, u[t][1] = 0, u[t][2] = W, u[t][3] = H; }
+    for (i = 0; i < gsDrawCount; i++) {
+        const GsDraw *d = &gsDraws[i];
+        if (d->native == 0 && first[d->target] < 0) { first[d->target] = (int)i; }
+    }
+    /* A buffer that does not begin with the clear, or did not the frame before: its bytes may be read in a frame
+       to come before anything covers them, so everything is kept. */
+    for (t = 0; t < MAX_TARGETS; t++) {
+        int began;
+        if (first[t] < 0) { continue; }
+        began = clear_draw(&gsDraws[first[t]], &z);
+        if (began && sAuxBegan[t]) { u[t][0] = W, u[t][1] = H, u[t][2] = 0, u[t][3] = 0; }
+        sAuxBegan[t] = (uint8_t)began;
+    }
+    for (i = gsDrawCount; i-- > 0;) {
+        const GsDraw *d = &gsDraws[i];
+        int *r = u[d->target], x0, y0, x1, y1;
+        if (d->native == 4 || d->native == 5) {
+            int rx, ry, rw, rh;
+            if (d->native == 4 ? aux_region(i, &rx, &ry, &rw, &rh) : GsDraw_DateRegion(i, &rx, &ry, &rw, &rh)) {
+                if (rx < r[0]) { r[0] = rx; }
+                if (ry < r[1]) { r[1] = ry; }
+                if (rx + rw > r[2]) { r[2] = rx + rw; }
+                if (ry + rh > r[3]) { r[3] = ry + rh; }
+            } else if (d->native == 4 && getenv("BT3_AUX_COPY_WHOLE") != NULL) { /* (the whole buffer copied: aux_region) */
+                r[0] = 0, r[1] = 0, r[2] = W, r[3] = H;
+            }
+            continue;
+        }
+        if (d->native) {
+            continue;
+        }
+        x0 = d->scissor[0], y0 = d->scissor[1], x1 = d->scissor[0] + d->scissor[2], y1 = d->scissor[1] + d->scissor[3];
+        if (!d->vu) { /* its vertices' box (GS pixels), a pixel wider on every side */
+            float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
+            uint32_t j;
+            for (j = 0; j < d->count; j++) {
+                const Vtx *v = &gsVerts[d->first + j];
+                if (v->x < bx0) { bx0 = v->x; }
+                if (v->x > bx1) { bx1 = v->x; }
+                if (v->y < by0) { by0 = v->y; }
+                if (v->y > by1) { by1 = v->y; }
+            }
+            if (d->count > 0 && bx0 > -1e6f && bx1 < 1e6f && by0 > -1e6f && by1 < 1e6f) {
+                int b0 = (int)floorf(bx0 * (float)SCALE) - SCALE, c0 = (int)floorf(by0 * (float)SCALE) - SCALE;
+                int b1 = (int)ceilf(bx1 * (float)SCALE) + SCALE, c1 = (int)ceilf(by1 * (float)SCALE) + SCALE;
+                if (b0 > x0) { x0 = b0; }
+                if (c0 > y0) { y0 = c0; }
+                if (b1 < x1) { x1 = b1; }
+                if (c1 < y1) { y1 = c1; }
+            }
+        }
+        if (r[0] > x0) { x0 = r[0]; }
+        if (r[1] > y0) { y0 = r[1]; }
+        if (r[2] < x1) { x1 = r[2]; }
+        if (r[3] < y1) { y1 = r[3]; }
+        if (x1 <= x0 || y1 <= y0) { x0 = y0 = x1 = y1 = 0; }
+        sAuxNeed[i][0] = (int16_t)x0, sAuxNeed[i][1] = (int16_t)y0, sAuxNeed[i][2] = (int16_t)x1, sAuxNeed[i][3] = (int16_t)y1;
+        if (clear_draw(d, &z)) { /* before the clear nothing of this buffer is read again */
+            r[0] = W, r[1] = H, r[2] = 0, r[3] = 0;
+        }
+    }
+}
+static int pipe_no_aux(int p) {
+    if (sPipes[p].noAux == 0) {
+        int q = pipe_get(sPipes[p].key | 1u << 26);
+        sPipes[p].noAux = q >= 0 && sPipes[q].key == (sPipes[p].key | 1u << 26) ? q + 1 : p + 1;
+    }
+    return sPipes[p].noAux - 1;
+}
+
 static void vk_frame_end(void) {
     SDL_GPUCommandBuffer *cmd;
     SDL_GPUCopyPass *copy;
@@ -644,7 +836,7 @@ static void vk_frame_end(void) {
     int cur = -1, best = -1, bound = -1, i;
     bool acquired;
     uint64_t sEndT[5];
-    int lastPipe = -1, lastUni = -1, lastSampler = -1, haveFu = 0, haveScissor = 0; /* what the pass has set (the replay loop) */
+    int lastPipe = -1, lastUni = -1, lastSampler = -1, haveFu = 0, haveScissor = 0, pipe, split; /* what the pass has set (the replay loop) */
     SDL_GPUTexture *lastTex = NULL;
     struct { int32_t mode[4]; float misc[4]; float rect[4]; float orig[4]; float extra[4]; } lastFu;
     int lastScissor[4];
@@ -834,6 +1026,9 @@ static void vk_frame_end(void) {
     sEndT[1] = gpu_now();
     /* replay the frame */
     lastPipe = lastUni = lastSampler = -1;
+    if (aux_plan_on()) {
+        aux_plan();
+    }
     for (n = 0; n < gsDrawCount; n++) {
         const GsDraw *d = &gsDraws[n];
         SDL_GPUBufferBinding vb;
@@ -906,7 +1101,16 @@ static void vk_frame_end(void) {
             SDL_zero(to);
             from.texture = sTgAux[d->target];
             to.texture = sAuxCopy;
-            SDL_CopyGPUTextureToTexture(cp, &from, &to, GS_W * SCALE, GS_H * SCALE, 1, false);
+            {
+                int rx, ry, rw, rh;
+                if (aux_region(n, &rx, &ry, &rw, &rh)) { /* only what the passes reading it read */
+                    from.x = to.x = (Uint32)rx;
+                    from.y = to.y = (Uint32)ry;
+                    SDL_CopyGPUTextureToTexture(cp, &from, &to, (Uint32)rw, (Uint32)rh, 1, false);
+                } else {
+                    SDL_CopyGPUTextureToTexture(cp, &from, &to, GS_W * SCALE, GS_H * SCALE, 1, false);
+                }
+            }
             SDL_EndGPUCopyPass(cp);
             continue;
         }
@@ -970,7 +1174,8 @@ static void vk_frame_end(void) {
             fs.texture = sAuxCopy; /* the ids as copied by the game, not the live alpha (later passes overwrite it) */
             fs.sampler = sSamplers[6]; /* nearest, clamped */
             SDL_BindGPUFragmentSamplers(pass, 0, &fs, 1);
-            params[0] = 1.0f / (float)GS_W;
+            extern int Port_PageAspectMilli(void); /* plat_stub.c: the shape of the page shown now */
+            params[0] = 1333.333f / (float)Port_PageAspectMilli() / (float)GS_W; /* one PS2 pixel across, as wide as at 4:3 (outline.frag) */
             params[1] = 1.0f / (float)GS_H;
             params[2] = 100.0f / 255.0f; /* the dark rectangle's 0x64 */
             params[3] = getenv("BT3_FX_DEBUG") != NULL ? 1.0f : 0.0f;
@@ -981,6 +1186,39 @@ static void vk_frame_end(void) {
             SDL_EndGPURenderPass(pass);
             pass = NULL;
             continue;
+        }
+        {
+            float clearDepth;
+            if (clear_draw(d, &clearDepth)) { /* the frame's clear: the render pass clears instead (clear_draw) */
+                SDL_GPUColorTargetInfo cts[2];
+                SDL_GPUDepthStencilTargetInfo dt;
+                if (pass != NULL) {
+                    SDL_EndGPURenderPass(pass);
+                }
+                SDL_zero(cts);
+                SDL_zero(dt);
+                cts[0].texture = sTgCol[d->target];
+                cts[0].load_op = SDL_GPU_LOADOP_CLEAR;
+                cts[0].store_op = SDL_GPU_STOREOP_STORE;
+                cts[1] = cts[0];
+                cts[1].texture = sTgAux[d->target];
+                dt.texture = sTgDep[d->target];
+                dt.load_op = SDL_GPU_LOADOP_CLEAR;
+                dt.store_op = SDL_GPU_STOREOP_STORE;
+                dt.clear_depth = clearDepth;
+                dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+                dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+                gsTargets[d->target].cleared = 1;
+                pass = SDL_BeginGPURenderPass(cmd, cts, 2, &dt);
+                if (sShadowStencil) { SDL_SetGPUStencilReference(pass, 0); }
+                cur = d->target;
+                bound = -1;
+                lastPipe = lastUni = lastSampler = -1;
+                lastTex = NULL;
+                haveFu = haveScissor = 0;
+                lastBlend = -1.0f;
+                continue;
+            }
         }
         shadowStart = (sPipes[d->pipeline].key & (1u << 24)) != 0 &&
             (n == 0 || gsDraws[n - 1].native || gsDraws[n - 1].target != d->target ||
@@ -1041,9 +1279,21 @@ static void vk_frame_end(void) {
             SDL_PushGPUVertexUniformData(cmd, 0, &gsVuUni[d->uniform], sizeof(Vu0Uniform));
             lastUni = (int)d->uniform;
         }
-        if ((int)d->pipeline != lastPipe) {
-            SDL_BindGPUGraphicsPipeline(pass, sPipes[d->pipeline].p);
-            lastPipe = (int)d->pipeline;
+        /* the alpha bytes: kept where they are read later, left alone elsewhere (aux_plan) */
+        pipe = (int)d->pipeline;
+        split = 0;
+        if (aux_plan_on() && (sPipes[pipe].key >> 16 & SDL_GPU_COLORCOMPONENT_A)) {
+            const int16_t *r = sAuxNeed[n];
+            if (r[2] <= r[0]) {
+                pipe = pipe_no_aux(pipe);
+            } else if (!d->vu && (r[0] > d->scissor[0] || r[1] > d->scissor[1] || r[2] < d->scissor[0] + d->scissor[2] ||
+                                  r[3] < d->scissor[1] + d->scissor[3]) && pipe_no_aux(pipe) != pipe) {
+                split = 1; /* (a vertex program's draw is not split: its vertices would be worked out again) */
+            }
+        }
+        if (pipe != lastPipe) {
+            SDL_BindGPUGraphicsPipeline(pass, sPipes[pipe].p);
+            lastPipe = pipe;
         }
         if ((SDL_GPUTexture *)(uintptr_t)d->tex != lastTex || (int)d->sampler != lastSampler) {
             SDL_GPUTextureSamplerBinding two[2];
@@ -1080,6 +1330,26 @@ static void vk_frame_end(void) {
         }
         if (d->vu) {
             SDL_DrawGPUIndexedPrimitives(pass, d->count, 1, d->first, 0, 0);
+        } else if (split) {
+            /* inside the part read later with the byte, the rest of its scissor without: four bands around it */
+            const int16_t *r = sAuxNeed[n];
+            int sx0 = d->scissor[0], sy0 = d->scissor[1], sx1 = sx0 + d->scissor[2], sy1 = sy0 + d->scissor[3], b;
+            SDL_Rect in = { r[0], r[1], r[2] - r[0], r[3] - r[1] }, out[4];
+            out[0] = (SDL_Rect){ sx0, sy0, sx1 - sx0, r[1] - sy0 };
+            out[1] = (SDL_Rect){ sx0, r[3], sx1 - sx0, sy1 - r[3] };
+            out[2] = (SDL_Rect){ sx0, r[1], r[0] - sx0, r[3] - r[1] };
+            out[3] = (SDL_Rect){ r[2], r[1], sx1 - r[2], r[3] - r[1] };
+            SDL_SetGPUScissor(pass, &in);
+            SDL_DrawGPUPrimitives(pass, d->count, 1, d->first, 0);
+            lastPipe = pipe_no_aux(pipe);
+            SDL_BindGPUGraphicsPipeline(pass, sPipes[lastPipe].p);
+            for (b = 0; b < 4; b++) {
+                if (out[b].w > 0 && out[b].h > 0) {
+                    SDL_SetGPUScissor(pass, &out[b]);
+                    SDL_DrawGPUPrimitives(pass, d->count, 1, d->first, 0);
+                }
+            }
+            haveScissor = 0;
         } else {
             SDL_DrawGPUPrimitives(pass, d->count, 1, d->first, 0);
         }

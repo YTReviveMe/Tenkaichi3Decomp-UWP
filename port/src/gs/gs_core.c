@@ -1334,13 +1334,19 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
         uint64_t waited = (uint64_t)gPortSleptNs;
         uint64_t work = t - start > waited ? t - start - waited : 0; /* without the waiting for the vertical blank */
         gPortSleptNs = 0;
-        {   /* a frame over budget: where the time went and what was created in it */
+        {   /* a frame over budget: where the time went and what was created in it (in an online match a frame of
+               100 ms or more always, without BT3_GS_VERBOSE: the other player's copy waits for this one meanwhile;
+               the time this copy itself waited for the other player is said apart, gs/net.c) */
             extern unsigned gGpuNewTex, gGpuNewTexPixels, gGpuNewPipes;
-            extern uint64_t gGpuTexNs, gGpuPipeNs, gGpuEndNs;
-            if (work > 33366700ull && getenv("BT3_GS_VERBOSE") != NULL) {
-                fprintf(stderr, "slow: frame %u: %.1f ms = game %.1f ms + display list %.1f ms; %u new textures (%u pixels), %u new pipelines\n",
-                        sFrame, (double)work / 1e6, (double)(tChain - start) / 1e6, (double)(t - tChain) / 1e6, gGpuNewTex, gGpuNewTexPixels,
-                        gGpuNewPipes);
+            extern uint64_t gGpuTexNs, gGpuPipeNs, gGpuEndNs, gPortNetWaitNs;
+            extern int Port_NetActive(void);
+            uint64_t netWait = gPortNetWaitNs;
+            gPortNetWaitNs = 0;
+            if (work > 33366700ull && (getenv("BT3_GS_VERBOSE") != NULL || (Port_NetActive() && work - (netWait < work ? netWait : work) >= 100000000ull))) {
+                fprintf(stderr, "slow: frame %u: %.1f ms = game %.1f ms (of it waiting for the other player %.1f ms) + display list %.1f ms; "
+                                "%u new textures (%u pixels), %u new pipelines\n",
+                        sFrame, (double)work / 1e6, (double)(tChain - start) / 1e6, (double)netWait / 1e6, (double)(t - tChain) / 1e6, gGpuNewTex,
+                        gGpuNewTexPixels, gGpuNewPipes);
                 fprintf(stderr, "slow:   of the display list time: texture decoding %.1f ms, pipeline creation %.1f ms, submitting the frame %.1f ms\n",
                         (double)gGpuTexNs / 1e6, (double)gGpuPipeNs / 1e6, (double)gGpuEndNs / 1e6);
             }
@@ -1368,8 +1374,8 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
 #ifdef BT3_UWP
             static unsigned lastReplaced;
             extern unsigned gGpuTexReplaced;
-            extern uint64_t gGpuPackLookupNs, gGpuPackLoadNs, gGpuPackUploadNs, gGpuPackBytes;
-            extern unsigned gGpuPackCacheHits, gGpuPackLoads, gGpuPackLoadFailures, gGpuPackEvictions;
+            extern uint64_t gGpuPackLookupNs, gGpuPackUploadNs, gGpuPackBytes;
+            extern unsigned gGpuPackCacheHits, gGpuPackEvictions;
             extern uint64_t GsDraw_TextureCacheBytes(void);
             extern int GsDraw_TexturePackEnabled(void);
             extern int gsTexCount;
@@ -1377,6 +1383,8 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
             lastReplaced = gGpuTexReplaced;
             if (TexPack_Count() != 0) {
                 char message[256];
+                TexPackStats packStats;
+                TexPack_ReadStats(&packStats);
                 snprintf(message, sizeof(message),
                          "Texture perf frame %u pack %s: avg %.1f ms, worst %.1f ms, %u/60 over 33 ms; game %.1f, render wait %.1f, list %.1f, decode %.1f, submit %.1f ms",
                          sFrame, GsDraw_TexturePackEnabled() ? "on" : "off",
@@ -1385,14 +1393,20 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
                          (double)(sumList - sumRenderWait) / 60e6, (double)sumTex / 60e6, (double)sumEnd / 60e6);
                 PortUwp_Trace(message);
                 snprintf(message, sizeof(message),
-                         "Texture pack: %u new, %u loads, %u failed, %u cached, %u evicted; lookup %.1f, file/decode %.1f, upload prep %.1f ms; %.1f MiB uploaded, cache %.1f MiB (%d entries)",
-                         replacements, gGpuPackLoads, gGpuPackLoadFailures, gGpuPackCacheHits, gGpuPackEvictions,
-                         (double)gGpuPackLookupNs / 1e6, (double)gGpuPackLoadNs / 1e6, (double)gGpuPackUploadNs / 1e6,
+                         "Texture GPU: %u new, %u cached, %u evicted; lookup/queue %.1f, upload %.1f ms; %.1f MiB uploaded, cache %.1f MiB (%d entries)",
+                         replacements, gGpuPackCacheHits, gGpuPackEvictions,
+                         (double)gGpuPackLookupNs / 1e6, (double)gGpuPackUploadNs / 1e6,
                          (double)gGpuPackBytes / 1048576.0, (double)GsDraw_TextureCacheBytes() / 1048576.0, gsTexCount);
                 PortUwp_Trace(message);
+                snprintf(message, sizeof(message),
+                         "Texture files: %s, %u reads, %u hits, %u failed, %u queued, %u pending, %u evicted; file/decode %.1f ms, RAM %.1f MiB",
+                         packStats.async ? "async" : "sync", packStats.reads, packStats.cacheHits, packStats.failures, packStats.queued,
+                         packStats.pending, packStats.evictions, (double)packStats.fileReadNs / 1e6,
+                         (double)packStats.heldBytes / 1048576.0);
+                PortUwp_Trace(message);
             }
-            gGpuPackLookupNs = gGpuPackLoadNs = gGpuPackUploadNs = gGpuPackBytes = 0;
-            gGpuPackCacheHits = gGpuPackLoads = gGpuPackLoadFailures = gGpuPackEvictions = 0;
+            gGpuPackLookupNs = gGpuPackUploadNs = gGpuPackBytes = 0;
+            gGpuPackCacheHits = gGpuPackEvictions = 0;
             sumRenderWait = 0;
 #endif
             if (getenv("BT3_GS_VERBOSE") != NULL) {

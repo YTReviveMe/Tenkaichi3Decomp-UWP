@@ -189,7 +189,12 @@ def main():
     nz_text = (ROOT / "port/src/gs/shaders/gs.frag").read_text().replace("\n", "\n#define NO_FRAG_DEPTH\n", 1)
     if not nz.exists() or nz.read_text() != nz_text:
         nz.write_text(nz_text)
-    shader_sources = sorted((ROOT / "port/src/gs/shaders").glob("*.*")) + [nz]
+    # gswb.frag: that, and the GS's 1x sampling of a work buffer (GS_BLOCK), for the glow chain's draws (key bit 25)
+    wb = gen / "gswb.frag"
+    wb_text = (ROOT / "port/src/gs/shaders/gs.frag").read_text().replace("\n", "\n#define NO_FRAG_DEPTH\n#define GS_BLOCK\n", 1)
+    if not wb.exists() or wb.read_text() != wb_text:
+        wb.write_text(wb_text)
+    shader_sources = sorted((ROOT / "port/src/gs/shaders").glob("*.*")) + [nz, wb]
     for src in shader_sources:  # gs.vert -> kGsVertSpv, outline.frag -> kOutlineFragSpv
         stage = src.suffix[1:]
         name = "k" + src.stem.capitalize() + stage.capitalize() + "Spv"

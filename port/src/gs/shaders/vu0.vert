@@ -21,6 +21,7 @@ layout(set = 1, binding = 0) uniform U {
     vec4 color0, color1; // 22, 23 (0..255)
     vec4 misc;           // x, y: XYOFFSET in pixels, z: depth maximum, w: layer (0 or 1; 2 = programs 2a / 2b; 3 = program 8; 4 = program 7; 5 = program 1 layer 1)
     vec4 light2;         // program 1: the y components of 10..13
+    vec4 target;         // x: GS pixels per texel of the target (gs_draw.c target_lowres; 0 = 1)
 } u;
 void main() {
     float w = u.misc.w == 4.0 ? 1.0 : inPos.w; // layer 4 (debris, rigid): the 4th word is a flag, not a weight
@@ -30,7 +31,8 @@ void main() {
     // Programs 2a / 2b: the shadow camera's matrix is orthographic with a NEGATIVE constant w (measured: -862).
     // The PS2 only divides by it; a GPU would clip everything as "behind the eye". The same point with w > 0:
     if (u.misc.w == 2.0 && s.w < 0.0) s = -s;
-    gl_Position = vec4((s.x - u.misc.x * s.w) / 512.0 - s.w, s.w - (s.y - u.misc.y * s.w) / 512.0, s.z / abs(u.misc.z), s.w);
+    float tx = u.target.x > 0.0 ? 512.0 * u.target.x : 512.0; // (a work buffer at the PS2's resolution: its corner)
+    gl_Position = vec4((s.x - u.misc.x * s.w) / tx - s.w, s.w - (s.y - u.misc.y * s.w) / tx, s.z / abs(u.misc.z), s.w);
     // The vertex program hands the GS a whole-number depth (it converts s.z / s.w to an integer), and the GS
     // compares whole numbers at every pixel (gs.frag). Here: that whole number plus a half, so that what is
     // interpolated between vertices never sits on the edge between two whole numbers.

@@ -621,12 +621,20 @@ void StgPanBlur_RestoreEnv(void) {
    coordinates go through `s64` temporaries (so that the `|` with the V half is not narrowed to 32 bits and they
    step as 64-bit values), and the first corner's X comes from `i`, not from `x` (so the loop cannot be reversed
    before the second loop pass, which puts the counter's initial value behind that corner's). */
+#ifdef PORT
+extern void Port_GsMarker(s32 effect); /* port/src/gs_marker.c */
+#define PORT_GLOW_BEGIN 0x20 /* the PC renderer draws the chain's work pages at the PS2's resolution (gs_draw.c) */
+#define PORT_GLOW_END 0x21
+#endif
 void GfxPost_DrawGlow(s32 passes, u32 color, u32 glow) {
     u64 *p;
     s32 i;
     s32 x;
 
     passes += passes & 1;
+#ifdef PORT
+    Port_GsMarker(PORT_GLOW_BEGIN);
+#endif
     Gfx_AddDefaultEnv();
     p = Dma_BeginDirect();
     p[0] = GIF_TAG(13, 0, 1);
@@ -1042,6 +1050,9 @@ void GfxPost_DrawGlow(s32 passes, u32 color, u32 glow) {
     p[1] = GS_CLAMP_1;
     p += 2;
     Dma_EndDirect(p);
+#ifdef PORT
+    Port_GsMarker(PORT_GLOW_END);
+#endif
 }
 
 /* Draws a 16-bit texture over the screen, one line up, with the given blend. */

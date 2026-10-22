@@ -75,6 +75,7 @@ typedef struct Voice {
     float gl, gr;
     float fade;                /* 1 = playing; goes down to 0 after a stop */
     int stopping;
+    unsigned serial;           /* which start of an effect this voice plays (sHeard) */
 } Voice;
 
 /* Beside the sound chip's memory: room for the clip banks this copy plays in the place of the game's (voice_own_bank). */
@@ -263,16 +264,130 @@ static int slot_of(int mask) {
     return -1;
 }
 
-static void play(int mask, int id, int volume, int pan, int pitch, int handle) {
-    if (gPortResim) { /* a frame that is only being re-run: its sounds were heard the first time */
-        return;
+/* The effects started in each of the last blanks of an online match with rollback, and the voice each one plays.
+   A blank run again after the other player's real input came:
+     - an effect it starts that was heard when the blank was first run is not started a second time; the voice
+       playing it takes the handle the game gave it now (the game's handles count the effects started, and the
+       blanks before may have started others this time, so a later stop by handle names the new one);
+     - an effect it starts that was not heard is started then, a few blanks late: an effect of what that input
+       changed (their vanish, a counter) was never heard, as the first run had a guess;
+     - when the run again is over, an effect heard the first time that it did not start again is stopped: it came
+       from the wrong guess (a ki charge the other player had let go of: its sound loops until it is stopped). */
+#define HEARD_BLANKS 32 /* (more than the most blanks run again: net.c's rollback goes back at most 8) */
+#define HEARD_EACH 32   /* (the most effects the game starts in a blank: one queue) */
+static struct {
+    unsigned tick;
+    int n;
+    uint8_t slot[HEARD_EACH], id[HEARD_EACH], used[HEARD_EACH];
+    uint8_t voice[HEARD_EACH];
+    unsigned serial[HEARD_EACH];
+} sHeard[HEARD_BLANKS];
+static unsigned sSerial;
+
+/* net.c: blank `tick` of an online match with rollback is about to be run for the first time. */
+void PortSe_BlankBegins(unsigned tick) {
+    sHeard[tick % HEARD_BLANKS].tick = tick;
+    sHeard[tick % HEARD_BLANKS].n = 0;
+}
+
+/* net.c: blanks first..live - 1 have been run again; blank `live` is the present again. */
+void PortSe_RunAgainEnds(unsigned first, unsigned live) {
+    unsigned t;
+    int k, kept;
+
+    if (live - first > HEARD_BLANKS) {
+        first = live - HEARD_BLANKS;
     }
+    if (sStream != NULL) { SDL_LockAudioStream(sStream); }
+    for (t = first; t != live; t++) {
+#define H sHeard[t % HEARD_BLANKS]
+        if (H.tick != t) {
+            continue;
+        }
+        for (k = kept = 0; k < H.n; k++) {
+            if (!H.used[k]) { /* heard the first time, not started this time */
+                Voice *v = &sVoices[H.voice[k]];
+                if (v->on && v->serial == H.serial[k]) {
+                    v->stopping = 1;
+                    if (getenv("BT3_SND_VERBOSE") != NULL) {
+                        fprintf(stderr, "se: blank %u run again: bank %d effect %d not started this time, stopped\n", t, H.slot[k], H.id[k]);
+                    }
+                }
+                continue;
+            }
+            H.slot[kept] = H.slot[k];
+            H.id[kept] = H.id[k];
+            H.voice[kept] = H.voice[k];
+            H.serial[kept] = H.serial[k];
+            H.used[kept] = 0; /* (what this run started: what a later run again is compared with) */
+            kept++;
+        }
+        H.n = kept;
+#undef H
+    }
+    if (sStream != NULL) { SDL_UnlockAudioStream(sStream); }
+}
+
+/* 1 when this start of an effect is not to be heard: the blank runs without sound, or it is only being run again
+   and it started the same effect the first time (each one heard then is matched once). */
+static int muted(int slot, int id, int handle) {
+    extern int Port_NetResim(void);    /* net.c */
+    extern unsigned Port_NetTick(void);
+    unsigned tick;
+    int k;
+
+    if (!gPortResim) {
+        return 0;
+    }
+    if (!Port_NetResim()) {
+        return 1; /* (an online match's start-up, the sync test: run without sound) */
+    }
+    tick = Port_NetTick();
+    if (sHeard[tick % HEARD_BLANKS].tick != tick) {
+        return 1; /* (too far back) */
+    }
+#define H sHeard[tick % HEARD_BLANKS]
+    for (k = 0; k < H.n; k++) {
+        if (!H.used[k] && H.slot[k] == slot && H.id[k] == id) {
+            Voice *v = &sVoices[H.voice[k]];
+            H.used[k] = 1;
+            if (v->on && v->serial == H.serial[k]) {
+                v->handle = handle;
+            }
+            return 1;
+        }
+    }
+#undef H
+    if (getenv("BT3_SND_VERBOSE") != NULL) {
+        fprintf(stderr, "se: blank %u run again: bank %d effect %d was not heard the first time, started now\n", tick, slot, id);
+    }
+    return 0;
+}
+
+/* Notes the effect a voice was started for in this blank of an online match with rollback. */
+static void heard(int slot, int id, int voice) {
+    extern unsigned Port_NetTick(void); /* net.c */
+    unsigned tick = Port_NetTick();
+
+#define H sHeard[tick % HEARD_BLANKS]
+    if (H.tick == tick && H.n < HEARD_EACH) {
+        H.slot[H.n] = (uint8_t)slot;
+        H.id[H.n] = (uint8_t)id;
+        H.voice[H.n] = (uint8_t)voice;
+        H.serial[H.n] = sVoices[voice].serial;
+        H.used[H.n] = (uint8_t)(gPortResim != 0); /* (started late: matched already when this run again ends) */
+        H.n++;
+    }
+#undef H
+}
+
+static void play(int mask, int id, int volume, int pan, int pitch, int handle) {
     int slot = slot_of(mask), k, pick = -1;
     uint32_t start, rate;
     double theta;
     Voice *v;
 
-    if (slot < 0 || !sBanks[slot].set || !lookup(&sBanks[slot], id, &start, &rate)) {
+    if (slot < 0 || muted(slot, id, handle) || !sBanks[slot].set || !lookup(&sBanks[slot], id, &start, &rate)) {
         return;
     }
     for (k = 0; k < VOICES; k++) {
@@ -299,6 +414,8 @@ static void play(int mask, int id, int volume, int pan, int pitch, int handle) {
     v->gl = (float)(cos(theta) * 1.41421356) * ((float)volume / 127.0f) * sBanks[slot].volume * SE_GAIN(slot);
     v->gr = (float)(sin(theta) * 1.41421356) * ((float)volume / 127.0f) * sBanks[slot].volume * SE_GAIN(slot);
     v->on = 1;
+    v->serial = ++sSerial;
+    heard(slot, id, pick);
     if (getenv("BT3_SND_VERBOSE") != NULL) {
         fprintf(stderr, "se: play bank %d effect %d: %u Hz, volume %d, pan %d, pitch %d, handle %d\n", slot, id, rate, volume, pan, pitch, handle);
     }
@@ -377,7 +494,9 @@ static int bank_parts(const uint8_t *b, long size, uint32_t *hd, uint32_t *hdSiz
    voice set, the slot plays that set's bank. */
 static void voice_own_bank(int slot) {
     extern int Port_NetVoiceAlt(void); /* net.c */
-    static uint8_t (*sig)[64]; /* the first 64 bytes of each default bank's header table */
+    /* each default bank's header table, whole: the first 64 bytes alone are the same for two fighters' banks (3 and
+       122: Goku (End) and Turles Great Ape), and the first of them was taken for both until 0.1.38 */
+    static struct { uint8_t *hd; uint32_t size; } *sig;
     static int tried;
     Bank *bk = &sBanks[slot];
     int c, found = -1;
@@ -395,15 +514,18 @@ static void voice_own_bank(int slot) {
         sig = calloc(VOICE_BANKS, sizeof(*sig));
         for (c = 0; sig != NULL && c < VOICE_BANKS; c++) {
             if ((b = bank_file(VOICE_BANK_DEFAULT + c, &size)) != NULL) {
-                if (bank_parts(b, size, &hd, &hdSize, &sq, &sqSize, &smp, &smpSize) && hdSize >= 64) {
-                    memcpy(sig[c], b + hd, 64);
+                if (bank_parts(b, size, &hd, &hdSize, &sq, &sqSize, &smp, &smpSize) && hdSize >= 64 &&
+                    (sig[c].hd = malloc(hdSize)) != NULL) {
+                    memcpy(sig[c].hd, b + hd, hdSize);
+                    sig[c].size = hdSize;
                 }
                 free(b);
             }
         }
     }
     for (c = 0; sig != NULL && c < VOICE_BANKS && found < 0; c++) {
-        if (sig[c][0] != 0 && memcmp(sig[c], bk->hd, 64) == 0) {
+        /* (the first 64 bytes first: the game's table may be a shorter one, of another bank) */
+        if (sig[c].hd != NULL && memcmp(sig[c].hd, bk->hd, 64) == 0 && memcmp(sig[c].hd, bk->hd, sig[c].size) == 0) {
             found = c;
         }
     }

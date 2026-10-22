@@ -25,6 +25,28 @@ layout(set = 3, binding = 0) uniform Params {
 // 1.0 where v is not negative
 vec2 step2(vec2 v) { return vec2(v.x >= 0.0 ? 1.0 : 0.0, v.y >= 0.0 ? 1.0 : 0.0); }
 
+#ifdef GS_BLOCK
+// A work buffer read as the GS reads it at 1x (mode.x == 2, orig.x = output texels per GS texel): the bilinear
+// filter between whole GS texels, each the average of its block, taken by four filtered reads a quarter of a GS
+// texel from its middle. Held inside rect by the middles of the edge GS texels, as the GS's CLAMP holds it.
+// Only in gswb.frag (this file with GS_BLOCK, key bit 25), for those draws alone, and only between work buffers
+// (gs_draw.c): the sixteen reads are not spent on the shader of every draw, nor on every pixel of the picture.
+vec4 gs_block(vec2 c, vec2 g) {
+    c = clamp(c, p.rect.xy, p.rect.zw);
+    if (p.orig.x < 2.5) return texture(tex, c); // (at 2x the block is 2 x 2: one filtered read at its middle is its average)
+    vec2 q = 0.25 / g;
+    return 0.25 * (texture(tex, c + vec2(-q.x, -q.y)) + texture(tex, c + vec2(q.x, -q.y)) +
+                   texture(tex, c + vec2(-q.x, q.y)) + texture(tex, c + vec2(q.x, q.y)));
+}
+vec4 gs_bilinear(vec2 uv) {
+    vec2 g = vec2(textureSize(tex, 0)) / p.orig.x; // GS texels across the whole texture
+    vec2 at = uv * g - 0.5, i = floor(at), f = at - i;
+    vec2 c = (i + 0.5) / g, d = 1.0 / g;
+    return mix(mix(gs_block(c, g), gs_block(c + vec2(d.x, 0.0), g), f.x),
+               mix(gs_block(c + vec2(0.0, d.y), g), gs_block(c + d, g), f.x), f.y);
+}
+#endif
+
 void main() {
     float k = 255.0 / 128.0;
     if (p.misc.y != 0.0) {
@@ -82,7 +104,11 @@ void main() {
             }
         }
         if (p.mode.x == 2) uv = clamp(uv, p.rect.xy, p.rect.zw);
+#ifdef GS_BLOCK
+        vec4 t = p.mode.x == 2 && p.orig.x > 1.5 ? gs_bilinear(uv) : texture(tex, uv);
+#else
         vec4 t = texture(tex, uv);
+#endif
         if (p.mode.x == 1 || p.mode.x == 3) t.a *= k; // a texture from GS memory keeps the GS alpha (0x80 opaque, up to 0xFF)
         // A texture pack's replacement. The game does more with a texture's alpha than blend: the alpha it writes
         // into the picture is tested by later draws, bit 7 as a mask (a texture that stays at 0x7F never sets it,

@@ -2,6 +2,7 @@
 // of a controller, or the key and button of its Controls list (gs_input.c: PortInput_Hotkey).
 // Everything it shows lives elsewhere (ui.h): the renderer's settings in gs_gpu.c, the bindings in gs_input.c.
 // It runs on the render thread, which owns the window and its events.
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -431,6 +432,33 @@ static void load_strips(void) {
     gUiSongReady = 1;
 }
 
+// The size of the windows drawn here: the style below and every width written in this file are for a picture 1080
+// pixels high, and a taller one makes them that much larger (2880 x 1800: 1.67), times the player's "Menu size"
+// (setting ui_scale, in percent, 100 by default). U() is a width or height of this file at that size.
+static float sUiScale = 1.0f;
+static int sUiScalePct = -1;  // (the setting, read once)
+static ImGuiStyle sBaseStyle; // (as style() makes it)
+static inline float U(float v) { return v * sUiScale; }
+
+static void ui_scale_apply(void) {
+    ImGuiIO &io = ImGui::GetIO();
+    float s = io.DisplaySize.y > 1080.0f ? io.DisplaySize.y / 1080.0f : 1.0f;
+    if (sUiScalePct < 0) {
+        sUiScalePct = Port_Setting("ui_scale", 100);
+    }
+    s *= (float)sUiScalePct / 100.0f;
+    s = s < 0.5f ? 0.5f : s > 4.0f ? 4.0f : s;
+    if (s != sUiScale) {
+        ImGuiStyle &st = ImGui::GetStyle();
+        float base = st.FontSizeBase;
+        sUiScale = s;
+        st = sBaseStyle;
+        st.FontSizeBase = base;
+        st.ScaleAllSizes(s);
+        st.FontScaleMain = s;
+    }
+}
+
 static void style() {
     ImGuiStyle &st = ImGui::GetStyle();
     ImGui::StyleColorsDark();
@@ -463,6 +491,8 @@ static void style() {
     c[ImGuiCol_TabSelected] = ImVec4(0.96f, 0.55f, 0.13f, 0.80f);
     c[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.10f, 0.14f, 0.98f);
     c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.03f);
+    sBaseStyle = st;
+    sUiScale = 1.0f;
 }
 
 static void language_init() {
@@ -657,18 +687,18 @@ static void build_quit(void) {
         const char *translated = MenuTranslation_PortText(PORT_TEXT_QUIT_CONFIRM);
         const char *kAsk = translated ? translated : "Close the game?\nUnsaved progress will be lost.";
         // the two buttons under the middle of the question (the window is as wide as its text)
-        float line = ImGui::CalcTextSize(kAsk).x, pair = 140.0f * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+        float line = ImGui::CalcTextSize(kAsk).x, pair = U(140.0f) * 2.0f + ImGui::GetStyle().ItemSpacing.x;
         ImGui::TextUnformatted(kAsk);
         ImGui::Spacing();
         if (line > pair) {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (line - pair) * 0.5f);
         }
-        if (ImGui::Button("Exit", ImVec2(140.0f, 0.0f))) {
+        if (ImGui::Button("Exit", ImVec2(U(140.0f), 0.0f))) {
             exit(0);
         }
         focus = ImGui::IsItemFocused() ? 0 : focus;
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(140.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+        if (ImGui::Button("Cancel", ImVec2(U(140.0f), 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
             stay = true;
         }
         focus = ImGui::IsItemFocused() ? 1 : focus;
@@ -729,7 +759,7 @@ static void quick_status(int state, int &lastState, const char *name) {
             Uint64 left = kSearchMs - (SDL_GetTicks() - since);
             ImGui::TextDisabled("Searching for %d:%02d more. Leave the window open.", (int)(left / 60000), (int)(left / 1000 % 60));
         }
-        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+        if (ImGui::Button("Cancel", ImVec2(U(120.0f), 0.0f))) {
             Port_LobbyCancel();
             lastState = 0;
         }
@@ -744,7 +774,7 @@ static void quick_status(int state, int &lastState, const char *name) {
     } else if (lastState == -5) {
         ImGui::TextWrapped("Nobody was searching this queue in the last three minutes. Search again, or try another queue.");
     }
-    if (ImGui::Button(lastState == -5 ? "Search again" : "Search for a match", ImVec2(200.0f, 0.0f))) {
+    if (ImGui::Button(lastState == -5 ? "Search again" : "Search for a match", ImVec2(U(200.0f), 0.0f))) {
         since = SDL_GetTicks() + 1;
         // The same for everyone in a quick match, whoever turns out to be the host: rollback of up to 8 frames and
         // the input delay measured from the connection. (The Host tab's own choices are for matches with someone
@@ -799,7 +829,7 @@ static void build_net(void) {
 #endif
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(U(560.0f), 0.0f), ImGuiCond_Appearing);
     if (pad_pressed(ImGuiKey_GamepadFaceRight)) { // Circle / B: out of the window, as its close button
         open = false;
     }
@@ -833,7 +863,7 @@ static void build_net(void) {
         ImGui::TextWrapped("Fight a player on another computer. One of you hosts, the other joins with the host's address.");
 #endif
         ImGui::Spacing();
-        ImGui::SetNextItemWidth(260.0f);
+        ImGui::SetNextItemWidth(U(260.0f));
         {
             static bool read;
             if (!read) { // the name used last time
@@ -859,7 +889,7 @@ static void build_net(void) {
                                       "small matchmaking service. Works with most home routers. Without it you host on a port,\n"
                                       "which must be reachable from the other player (port forwarding or a virtual network).");
                 ImGui::BeginDisabled(useCode);
-                ImGui::SetNextItemWidth(120.0f);
+                ImGui::SetNextItemWidth(U(120.0f));
                 ImGui::InputText("Port", port, sizeof(port), ImGuiInputTextFlags_CharsDecimal);
 #ifdef BT3_UWP
                 net_text_field();
@@ -876,7 +906,7 @@ static void build_net(void) {
                     if (delay < 0 || delay > 7) { delay = 0; }
                 }
                 ImGui::BeginDisabled(!Port_RollCan());
-                ImGui::SetNextItemWidth(260.0f);
+                ImGui::SetNextItemWidth(U(260.0f));
                 ImGui::Combo("Rollback", &roll, kRoll, 5);
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -884,7 +914,7 @@ static void build_net(void) {
                                       "other player's buttons arrive. More frames cope with a slower connection and cost\n"
                                       "more processor time. Off: both games wait for each other every frame.");
                 }
-                ImGui::SetNextItemWidth(260.0f);
+                ImGui::SetNextItemWidth(U(260.0f));
                 {
                     static const char *const kDelay[] = {"Automatic (from the connection)", "0 frames", "1 frame", "2 frames", "3 frames",
                                                          "4 frames", "5 frames", "6 frames"};
@@ -906,15 +936,15 @@ static void build_net(void) {
                         if (timeLimit < 0 || timeLimit > 4) { timeLimit = 3; }
                     }
                     ImGui::Spacing();
-                    ImGui::SetNextItemWidth(260.0f);
+                    ImGui::SetNextItemWidth(U(260.0f));
                     ImGui::Combo("Battle", &battle, kBattle, 5);
-                    ImGui::SetNextItemWidth(260.0f);
+                    ImGui::SetNextItemWidth(U(260.0f));
                     ImGui::Combo("Time limit", &timeLimit, kTime, 5);
                     {
                         if (speed < 0) {
                             speed = Port_Setting("net_speed_host", Port_NetSpeedStandard()) /* (a new name with 0.1.31: the standard went from 120 to 114) */;
                         }
-                        ImGui::SetNextItemWidth(260.0f);
+                        ImGui::SetNextItemWidth(U(260.0f));
                         ImGui::SliderInt("Game speed", &speed, 100, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp);
                         ImGui::SetItemTooltip("How fast the match runs, for both players; the sound keeps its pitch.\n"
                                               "100%% is the game's own speed. %d%% is the competitive standard, and what\n"
@@ -971,7 +1001,7 @@ static void build_net(void) {
             }
             if (ImGui::BeginTabItem("Join")) {
                 tab = 1;
-                ImGui::SetNextItemWidth(120.0f);
+                ImGui::SetNextItemWidth(U(120.0f));
                 ImGui::InputText("Room code", roomCode, sizeof(roomCode), ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank);
 #ifdef BT3_UWP
                 net_text_field();
@@ -990,12 +1020,12 @@ static void build_net(void) {
                 }
                 ImGui::TextDisabled("or, without a code, the host's address and port:");
                 ImGui::BeginDisabled(roomCode[0] != '\0');
-                ImGui::SetNextItemWidth(260.0f);
+                ImGui::SetNextItemWidth(U(260.0f));
                 ImGui::InputText("Host's address", address, sizeof(address));
 #ifdef BT3_UWP
                 net_text_field();
 #endif
-                ImGui::SetNextItemWidth(120.0f);
+                ImGui::SetNextItemWidth(U(120.0f));
                 ImGui::InputText("Port", port, sizeof(port), ImGuiInputTextFlags_CharsDecimal);
 #ifdef BT3_UWP
                 net_text_field();
@@ -1043,7 +1073,7 @@ static void build_net(void) {
                 } else {
                     ImGui::TextUnformatted(state == 1 ? "Found the room. Connecting to the host..." : tab == 0 ? "Getting a room code..." : "Looking for the room...");
                 }
-                if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+                if (ImGui::Button("Cancel", ImVec2(U(120.0f), 0.0f))) {
                     Port_LobbyCancel();
                     lastState = 0;
                 }
@@ -1056,7 +1086,7 @@ static void build_net(void) {
                 } else {
                     ImGui::Text("Looking for %s...", address);
                 }
-                if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+                if (ImGui::Button("Cancel", ImVec2(U(120.0f), 0.0f))) {
                     Port_LobbyCancel();
                 }
             } else {
@@ -1068,7 +1098,7 @@ static void build_net(void) {
                 }
                 bool can = byCode ? (tab == 0 || strlen(roomCode) == 6) : atoi(port) > 0 && (tab == 0 || address[0] != '\0');
                 ImGui::BeginDisabled(!can);
-                if (ImGui::Button(tab == 0 ? "Host a match" : "Join the match", ImVec2(200.0f, 0.0f))) {
+                if (ImGui::Button(tab == 0 ? "Host a match" : "Join the match", ImVec2(U(200.0f), 0.0f))) {
                     if (tab == 0 && roll >= 0) {
                         Port_NetOptions(roll * 2, delay == 0 ? -2 : delay - 1);
                         if (battle >= 0) {
@@ -1096,7 +1126,7 @@ static void build_net(void) {
                 }
                 ImGui::EndDisabled();
                 ImGui::SameLine();
-                if (ImGui::Button("Back", ImVec2(120.0f, 0.0f))) {
+                if (ImGui::Button("Back", ImVec2(U(120.0f), 0.0f))) {
                     open = false;
                 }
                 if (state == -2) {
@@ -1438,7 +1468,7 @@ static void video_tab(PortVideo &v) {
         // on one more picture is drawn between each two. The game itself, its replays and online play are the same.
         static const char *kSmooth[] = { "Off (30, as the console)", "60 pictures a second", "120 pictures a second", "240 pictures a second" };
         int smooth = gsInterp < 0 ? 0 : gsInterp > 3 ? 3 : gsInterp;
-        ImGui::SetNextItemWidth(416.0f);
+        ImGui::SetNextItemWidth(U(416.0f));
         if (ImGui::Combo("Smooth motion", &smooth, kSmooth, 4)) {
             gsInterp = smooth;
             Port_SettingSave("interp", gsInterp);
@@ -1448,6 +1478,24 @@ static void video_tab(PortVideo &v) {
                               "drawn between each two. The fight itself does not change, and neither does online play.\n"
                               "The newest picture reaches the screen later: 17 ms at 60, 25 ms at 120, 29 ms at 240.\n"
                               "Choose what your screen can show. F9 switches it off and on.");
+    }
+    {
+        // The size of these windows, the chat and the notices: larger with a taller picture by itself (sUiScale)
+        static int steps = 20; // (in fives of a percent; while it is dragged)
+        char shown[16];
+        snprintf(shown, sizeof(shown), "%d%%%%", steps * 5);
+        ImGui::SetNextItemWidth(U(416.0f));
+        ImGui::SliderInt("Menu size", &steps, 10, 40, shown, ImGuiSliderFlags_AlwaysClamp);
+        int pct = steps * 5;
+        if (ImGui::IsItemDeactivatedAfterEdit()) { // (applied on letting go: the slider would move under the pointer)
+            sUiScalePct = pct;
+            Port_SettingSave("ui_scale", pct);
+            Port_SettingsWrite();
+        } else if (!ImGui::IsItemActive()) {
+            steps = (sUiScalePct < 0 ? 100 : sUiScalePct) / 5;
+        }
+        ImGui::SetItemTooltip("The size of this window, the online windows, the chat and the notices. They already grow\n"
+                              "with a picture taller than 1080 pixels; this makes them larger or smaller than that.");
     }
     {
         bool on = meter_on();
@@ -1488,7 +1536,15 @@ static void effects_tab(PortVideo &v) {
     }
     ImGui::Spacing();
     ImGui::SliderInt("Glow strength", &v.glow, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SetItemTooltip("100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    ImGui::SetItemTooltip("The glow around characters and things (a Super Saiyan's hair, auras).\n"
+                          "100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    ImGui::SliderInt("Glare strength", &v.glare, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip("The glare of the sky and the stage's light.\n"
+                          "100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    bool sharp = v.sharpBlur != 0;
+    if (ImGui::Checkbox("Sharp stage blur", &sharp)) { v.sharpBlur = sharp; }
+    ImGui::SetItemTooltip("On: the stage's blur keeps the detail of the internal resolution (crisper, as other\n"
+                          "emulators show it upscaled). Off: as soft as the PlayStation 2 draws it. No difference at 1x.");
 }
 
 // ---- "an update is available" ----
@@ -1557,7 +1613,30 @@ static void misc_tab(void) {
         Port_SettingsWrite();
     }
     ImGui::SetItemTooltip("The page of legal text shown for five seconds before the title screen, every time.");
+    bool hidePointer = Port_Setting("hide_pointer", 1) != 0;
+    if (ImGui::Checkbox("Hide the mouse pointer during play", &hidePointer)) {
+        Port_SettingSave("hide_pointer", hidePointer);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("The pointer is hidden over the game and shown in this window, the online windows, the\n"
+                          "question before the game closes and while a chat line is typed.");
+    bool quickSave = Port_Setting("save_quick", 1) != 0;
+    if (ImGui::Checkbox("Quick saving", &quickSave)) {
+        Port_SettingSave("save_quick", quickSave);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("Save and load without the memory card pages: no question, no waiting, a small card in the\n"
+                          "corner while it saves, and the save loaded at start without a page. Load in the options\n"
+                          "still asks first, then loads at once. A missing card, a full card or a failed save is\n"
+                          "still shown. Online the game's own pages always run. Off: the game's own pages.");
     ImGui::Spacing();
+    bool desyncEnds = Port_Setting("net_desync_end", 0) != 0;
+    if (ImGui::Checkbox("End an online match on a desync", &desyncEnds)) {
+        Port_SettingSave("net_desync_end", desyncEnds);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("The two games compare what they compute. Off: when they no longer agree you are told, and the match\n"
+                          "goes on (the two screens may then show different fights). On: the match ends there.");
     bool chat = PortChat_Enabled() != 0;
     if (ImGui::Checkbox("Online chat", &chat)) {
         PortChat_EnabledSet(chat);
@@ -1762,12 +1841,12 @@ static void cheats_tab(void) {
     if (ImGui::BeginPopupModal("Unlock everything?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Your records list will be emptied. This cannot be undone once the game saves.");
         ImGui::Spacing();
-        if (ImGui::Button("Unlock", ImVec2(140.0f, 0.0f))) {
+        if (ImGui::Button("Unlock", ImVec2(U(140.0f), 0.0f))) {
             gPortUnlockAll = 1;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(140.0f, 0.0f))) {
+        if (ImGui::Button("Cancel", ImVec2(U(140.0f), 0.0f))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1781,7 +1860,7 @@ static void cheats_tab(void) {
 static void sticks_panel(int player) {
     static const char *const kStick[2] = {"Left stick", "Right stick"}, *const kTrigger[2] = {"Left trigger", "Right trigger"};
     static const char *const kDir[5] = {"", "up", "down", "left", "right"};
-    const float R = 42.0f, box = 2.0f * R + 8.0f;
+    const float R = U(42.0f), box = 2.0f * R + U(8.0f);
     const ImU32 colZone = ImGui::GetColorU32(ImGuiCol_Text, 0.22f);
     const ImU32 colRaw = ImGui::GetColorU32(ImGuiCol_Text), colGame = ImGui::GetColorU32(ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
     int *dead = PortInput_Deadzone(player), *vib = PortInput_Vibration(player);
@@ -1830,7 +1909,7 @@ static void sticks_panel(int player) {
             ImGui::TextDisabled("no controller");
             ImGui::TextDisabled(" ");
         }
-        ImGui::SetNextItemWidth(100.0f);
+        ImGui::SetNextItemWidth(U(100.0f));
         snprintf(label, sizeof(label), "Deadzone##%d", s);
         ImGui::SliderInt(label, &dead[s], -1, PORT_DEADZONE_MAX, dead[s] < 0 ? "Original" : "%d%%", ImGuiSliderFlags_AlwaysClamp);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -1848,7 +1927,7 @@ static void sticks_panel(int player) {
     for (int s = 0; s < 2; s++) {
         ImGui::TableNextColumn();
         snprintf(label, sizeof(label), "%d%%%s", (int)(view.trigger[s] * 100.0f + 0.5f), view.triggerHeld[s] ? " pressed" : "");
-        ImGui::ProgressBar(view.trigger[s], ImVec2(144.0f, 0.0f), label);
+        ImGui::ProgressBar(view.trigger[s], ImVec2(U(144.0f), 0.0f), label);
         ImGui::SetItemTooltip("A trigger counts as pressed from %d%% on. The game is told pressed or not, nothing between.",
                               (PORT_TRIGGER_AT * 100 + 16383) / 32767);
         ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
@@ -1865,7 +1944,7 @@ static void sticks_panel(int player) {
                           "The game gives none in a replay or for a side the computer plays.");
     ImGui::BeginDisabled(!on);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SetNextItemWidth(U(160.0f));
     ImGui::SliderInt("Strength", &vib[1], 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp);
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         PortInput_Save();
@@ -1899,7 +1978,7 @@ static void controls_tab(void) {
     } else {
         snprintf(label, sizeof(label), "Controller %d (not connected)", *slot + 1);
     }
-    ImGui::SetNextItemWidth(300.0f);
+    ImGui::SetNextItemWidth(U(300.0f));
     if (ImGui::BeginCombo("Controller", label)) {
         if (ImGui::Selectable("None", *slot < 0)) { *slot = -1; PortInput_Save(); }
         for (int i = 0; i < (count > 4 ? count : 4); i++) {
@@ -1925,7 +2004,7 @@ static void controls_tab(void) {
     ImGui::TextDisabled("with a controller, press nothing for five seconds to keep it.");
     // (never lower than a few rows: in a small window the tab scrolls as a whole instead)
     if (ImGui::BeginTable("bindings", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV,
-                          ImVec2(0.0f, ImGui::GetContentRegionAvail().y > 140.0f ? ImGui::GetContentRegionAvail().y : 140.0f))) {
+                          ImVec2(0.0f, ImGui::GetContentRegionAvail().y > U(140.0f) ? ImGui::GetContentRegionAvail().y : U(140.0f)))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Action");
         ImGui::TableSetupColumn("Keyboard");
@@ -2013,7 +2092,11 @@ static void build(void) {
     }
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     // (760 high where the picture has the room: the Controls tab's sticks and its list of bindings together)
-    ImGui::SetNextWindowSize(ImVec2(640.0f, io.DisplaySize.y >= 800.0f ? 760.0f : 600.0f), ImGuiCond_Appearing);
+    { // (a large "Menu size" in a small window: no larger than the window)
+        float sw = U(640.0f), sh = io.DisplaySize.y >= U(800.0f) ? U(760.0f) : U(600.0f);
+        ImGui::SetNextWindowSize(ImVec2(sw < io.DisplaySize.x * 0.96f ? sw : io.DisplaySize.x * 0.96f,
+                                        sh < io.DisplaySize.y * 0.94f ? sh : io.DisplaySize.y * 0.94f), ImGuiCond_Appearing);
+    }
     if (ImGui::Begin("Settings", &open, ImGuiWindowFlags_NoCollapse)) {
         {
             int latest = update_latest();
@@ -2055,7 +2138,7 @@ static void build(void) {
                         }
                     }
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(80.0f);
+                    ImGui::SetNextItemWidth(U(80.0f));
                     if (ImGui::Combo("per press", &at, kWorth, 5)) {
                         Port_ClashSquareXSet(kQuarters[at]);
                     }
@@ -2141,6 +2224,52 @@ extern "C" void Port_UiBanner(const char *text, int ms) {
     sBannerUntil = ms > 0 ? SDL_GetTicks() + (Uint64)ms : 0;
 }
 
+// The save icon (quick saving, src/sys/mcflow_a.c): a small memory card in the bottom right corner of the picture
+// while the game saves, at least a second, then it fades. Set from the game's thread: 1 saving, 0 saved, -1 the
+// game's own window took over (an error: the icon goes at once).
+static volatile int sSaving;
+static Uint64 sSaveFrom, sSaveEnd; // (0: not shown; the end, 0 while it saves)
+extern "C" void Port_UiSaving(int state) {
+    sSaving = state;
+}
+
+static bool save_icon_on(Uint64 now) {
+    int state = sSaving;
+    if (state > 0 && (sSaveFrom == 0 || sSaveEnd != 0)) {
+        sSaveFrom = now;
+        sSaveEnd = 0;
+    }
+    if (sSaveFrom != 0 && sSaveEnd == 0 && (state <= 0 || now - sSaveFrom > 15000)) { // (or a flow left half-way)
+        sSaveEnd = state < 0 || now > sSaveFrom + 1000 ? now : sSaveFrom + 1000;
+        if (state == 0) {
+            PortA11y_Say(PortA11y_Label("Saved"), 0);
+        }
+    }
+    if (sSaveEnd != 0 && now >= sSaveEnd + 400) {
+        sSaveFrom = 0;
+    }
+    return sSaveFrom != 0;
+}
+
+static void save_icon_draw(Uint64 now) {
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float h = (float)gUiPresentH * 0.055f, w = h * 0.78f;
+    float x1 = (float)(gUiPresentX + gUiPresentW) - h * 0.6f, y1 = (float)(gUiPresentY + gUiPresentH) - h * 0.6f;
+    float x0 = x1 - w, y0 = y1 - h;
+    float a = sSaveEnd != 0 && now > sSaveEnd ? 1.0f - (float)(now - sSaveEnd) / 400.0f // fading
+                                               : 0.7f + 0.3f * cosf((float)(now - sSaveFrom) * 0.006f); // saving: it pulses
+    a = a < 0.0f ? 0.0f : a;
+    auto col = [a](int r, int g, int b, int alpha) { return IM_COL32(r, g, b, (int)((float)alpha * a)); };
+    ImVec2 card[5] = {ImVec2(x0, y0), ImVec2(x1 - w * 0.28f, y0), ImVec2(x1, y0 + w * 0.28f), ImVec2(x1, y1), ImVec2(x0, y1)};
+    dl->AddConvexPolyFilled(card, 5, col(20, 24, 40, 210));
+    dl->AddPolyline(card, 5, col(255, 255, 255, 235), ImDrawFlags_Closed, h * 0.06f > 1.5f ? h * 0.06f : 1.5f);
+    for (int i = 0; i < 3; i++) { // the contacts
+        float cx = x0 + w * (0.17f + 0.19f * (float)i);
+        dl->AddRectFilled(ImVec2(cx, y0 + h * 0.1f), ImVec2(cx + w * 0.1f, y0 + h * 0.3f), col(255, 255, 255, 220));
+    }
+    dl->AddRectFilled(ImVec2(x0 + w * 0.18f, y0 + h * 0.48f), ImVec2(x1 - w * 0.18f, y1 - h * 0.14f), col(245, 140, 35, 235), h * 0.05f);
+}
+
 // The meter: frames shown and the game's speed, and in an online match the connection. A setting (Video tab).
 static bool meter_on(void) {
     if (sMeter < 0) {
@@ -2168,8 +2297,8 @@ static void meter_count(void) { // once per frame shown
 }
 
 static void meter_draw(void) {
-    int n[8];
-    ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
+    int n[10];
+    ImGui::SetNextWindowPos(ImVec2(U(8.0f), U(8.0f)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.6f);
     if (ImGui::Begin("##meter", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                                           ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings)) {
@@ -2187,7 +2316,15 @@ static void meter_draw(void) {
                 ImGui::TextUnformatted("rollback off");
             }
             ImGui::Text("waited %d ms/s (%d times)", n[4], n[3]);
+            if (n[8] == 1) { // gs/net.c wait_end: input packets came, without the frame this copy needed
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  the other player's game is behind");
+            } else if (n[8] == 2) { // nothing came for most of the wait
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  nothing arrived from the other player");
+            }
             ImGui::Text("delay %d%s, rollback up to %d", n[6], n[7] ? " (auto)" : "", n[5]);
+            if (n[9] != 0) { // the desync check found the two games apart (the match goes on)
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "desync since frame %d", n[9]);
+            }
         }
     }
     ImGui::End();
@@ -2307,8 +2444,8 @@ static void chat_draw(void) {
         minW = 400.0f;
     }
     float w = io.DisplaySize.x * wFactor;
-    if (w < minW) w = minW;
-    if (w > maxW) w = maxW;
+    if (w < U(minW)) w = U(minW);
+    if (w > U(maxW)) w = U(maxW);
     unsigned n = PortChat_Count(), rows = sChat ? rowsTyping : rowsPassive, first = n > rows ? n - rows : 0;
     Uint64 now = SDL_GetTicks();
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
@@ -2347,10 +2484,10 @@ static void chat_draw(void) {
     }
     ImGui::SetNextWindowBgAlpha(bgAlpha);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, U(8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(U(8.0f), U(6.0f)));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, sChat ? 1.0f : 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(U(4.0f), U(2.0f)));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.75f, 0.2f, 0.5f));
 
     if (sChat && sChatFocus) {
@@ -2399,7 +2536,7 @@ static void chat_draw(void) {
             ImGui::PushID((int)i);
             ImVec4 nameCol = l.mine ? ImVec4(0.35f, 0.85f, 1.0f, alpha) : ImVec4(1.0f, 0.82f, 0.28f, alpha);
             ImGui::TextColored(nameCol, "%s:", sender);
-            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::SameLine(0.0f, U(4.0f));
 
             ImVec2 at = ImGui::GetCursorScreenPos();
             if (!sChat) {
@@ -2509,9 +2646,11 @@ static bool frame_build(void) {
         sBanner[0] = '\0';
     }
     bool banner = sReady && sBanner[0] != '\0';
+    Uint64 now = SDL_GetTicks();
+    bool saving = save_icon_on(now) && sReady && gUiPresentW > 0 && gUiPresentH > 0;
     meter_count();
     sBuilt = false;
-    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner)) {
+    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !saving)) {
         return false;
     }
     if (sPadHold && sCapKind != 2) { // a binding was taken: the controller works the window again once nothing is held
@@ -2550,8 +2689,15 @@ static bool frame_build(void) {
         ImGui_ImplSDLGPU3_NewFrame();
     }
     ImGui_ImplSDL3_NewFrame();
+    ui_scale_apply(); // (the window's size is known from here)
     fonts_apply(); // (a face chosen for the fight panels, between two frames)
     ImGui::NewFrame();
+    // The mouse pointer is hidden over the game's picture and shown with a window of this file that takes the mouse:
+    // the settings, the online windows, the question before the game closes, a chat line being typed (setting
+    // hide_pointer, on unless 0). The SDL back end hides it for this cursor at the next frame.
+    if (!sOpen && !sQuit && !sChat && Port_Setting("hide_pointer", 1) != 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    }
     if (bars) {
         bars_draw();
     }
@@ -2622,6 +2768,9 @@ static bool frame_build(void) {
             }
         }
         dl->AddText(font, size, ImVec2(x, y), IM_COL32(255, 236, 120, 255), sBanner, NULL, wrap);
+    }
+    if (saving) {
+        save_icon_draw(now);
     }
     if (notice) { // a line over the picture for a few seconds (the end of an online match)
         ImGuiIO &io = ImGui::GetIO();

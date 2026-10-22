@@ -15,6 +15,13 @@
  *
  * Read: DDS with DXT1 / DXT3 / DXT5 data or plain 32-bit pixels, with its smaller copies (mip levels), and PNG
  * (the smaller copies are made here). Where a name exists as both, the first one found is used.
+ *
+ * The files are read by a thread of their own (TexPack_Get), the way PCSX2 loads them "asynchronously": a file read
+ * inside a frame held the picture up for as long as the disk took, 30 to 150 ms when an ultimate's effects first
+ * appear, and on a machine whose memory does not keep the pack's files cached every time the game uploads one of
+ * its textures again (hundreds of times a fight). Until a file is in, the renderer draws the original texture. What
+ * was read stays in memory (TEXPACK_BUDGET, the least recently used files go first). BT3_PACK_SYNC=1: each file is
+ * read at once, inside the frame, as before (the same picture in every run: tests).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +41,10 @@ typedef struct Entry {
     uint32_t bits;
     int pal;
     char *path;
+    int state;        /* 0 not in memory, 1 waiting for the reader, 2 in memory (img), 3 unreadable */
+    unsigned used;    /* when TexPack_Get last asked for it */
+    size_t held;      /* the bytes img holds */
+    TexPackImage img;
 } Entry;
 
 static Entry *sEntries;
@@ -44,22 +55,35 @@ static uint32_t sCount, sCap, *sBucket, sBuckets;
 #define TEXPACK_DIM_LIMIT 4096u
 #define TEXPACK_ENTRY_LIMIT 100000u
 #endif
+#define TEXPACK_BUDGET ((size_t)1024 << 20) /* the files kept in memory: one session's two fights took 289 MB */
+#define QUEUE 4096                          /* files waiting for the reader (a power of two) */
+static SDL_Mutex *sLock;
+static SDL_Condition *sWake;
+static SDL_Thread *sReader;
+static uint32_t sQueue[QUEUE], sHead, sTail; /* the reader takes from sTail */
+static uint32_t *sHeld, sHeldCount;          /* the entries in memory (state 2) */
+static size_t sHeldBytes, sBudget;
+static unsigned sTick;
+static int sSync = -1;
+#ifdef BT3_UWP
+static TexPackStats sStats;
+#endif
 
 static uint32_t bucket_of(uint64_t tex, uint64_t clut, uint32_t bits) {
     uint64_t h = (tex ^ (clut * 0x9E3779B97F4A7C15ull) ^ bits) * 0x9FB21C651E98DF25ull;
     return (uint32_t)(h >> 40);
 }
 
-static const char *find(uint64_t tex, uint64_t clut, uint32_t bits, int pal) {
+static int find(uint64_t tex, uint64_t clut, uint32_t bits, int pal) {
     uint32_t h = bucket_of(tex, clut, bits) & (sBuckets - 1);
     while (sBucket[h] != 0) {
         const Entry *e = &sEntries[sBucket[h] - 1];
         if (e->tex == tex && e->clut == clut && e->bits == bits && e->pal == pal) {
-            return e->path;
+            return (int)sBucket[h] - 1;
         }
         h = (h + 1) & (sBuckets - 1);
     }
-    return NULL;
+    return -1;
 }
 
 /* "1dd4c76113969303-56e3d4469d2ad392-00005e54.dds" */
@@ -102,6 +126,10 @@ static void add(const char *dir, const char *name) {
     e.pal = parts == 3;
     e.clut = e.pal ? strtoull(part[1], NULL, 16) : 0;
     e.bits = (uint32_t)strtoul(part[parts - 1], NULL, 16);
+    e.state = 0;
+    e.used = 0;
+    e.held = 0;
+    memset(&e.img, 0, sizeof(e.img));
     e.path = malloc(strlen(dir) + n + 1);
     if (e.path == NULL) {
         return;
@@ -259,7 +287,7 @@ void TexPack_Init(void) {
     for (i = 0; i < sCount; i++) {
         const Entry *e = &sEntries[i];
         uint32_t h = bucket_of(e->tex, e->clut, e->bits) & (sBuckets - 1);
-        if (find(e->tex, e->clut, e->bits, e->pal) != NULL) {
+        if (find(e->tex, e->clut, e->bits, e->pal) >= 0) {
             dup++; /* the same name in two folders of the pack: the first one found is used */
             continue;
         }
@@ -275,7 +303,11 @@ int TexPack_Count(void) {
     return (int)sCount;
 }
 
-const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t tcc, uint32_t cbp, uint32_t cpsm, uint32_t *maxAlpha) {
+const char *TexPack_Path(int id) {
+    return id >= 0 && (uint32_t)id < sCount ? sEntries[id].path : NULL;
+}
+
+int TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t tcc, uint32_t cbp, uint32_t cpsm, uint32_t *maxAlpha) {
     uint32_t bw, bh, x, y, i, lo = 255, hi = 0, bits, wl = 0, hl = 0;
     XXH3_state_t st;
     uint64_t tex;
@@ -283,14 +315,14 @@ const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw
 
     *maxAlpha = 255;
     if (sCount == 0) {
-        return NULL;
+        return -1;
     }
     if (psm == 0x13) { bw = 16; bh = 16; }
     else if (psm == 0x14) { bw = 32; bh = 16; }
     else if (psm == 0x00) { bw = 8; bh = 8; }
-    else { return NULL; }
+    else { return -1; }
     if (tw < bw || th < bh) {
-        return NULL; /* smaller than a block: hashed another way there, which is not worked out */
+        return -1; /* smaller than a block: hashed another way there, which is not worked out */
     }
     XXH3_64bits_reset(&st);
     for (y = 0; y < th; y += bh) {
@@ -321,11 +353,11 @@ const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw
         return find(tex, 0, bits, 0);
     }
     if (cpsm != 0) {
-        return NULL; /* 16-bit palettes are expanded with TEXA there: not seen in this game */
+        return -1; /* 16-bit palettes are expanded with TEXA there: not seen in this game */
     }
     {
         uint32_t clut[256], count = psm == 0x13 ? 256 : 16;
-        const char *path;
+        int id;
         for (i = 0; i < count; i++) {
             /* index order: an 8-bit palette is stored with entries 8..15 and 16..23 of every 32 exchanged */
             uint32_t k = psm == 0x13 ? ((i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1)) : i;
@@ -338,16 +370,16 @@ const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw
                 *maxAlpha = clut[i] >> 24;
             }
         }
-        path = find(tex, XXH3_64bits(&clut[lo], (hi - lo + 1) * 4), bits, 1);
-        if (path == NULL) {
-            path = find(tex, XXH3_64bits(clut, count * 4), bits, 1);
+        id = find(tex, XXH3_64bits(&clut[lo], (hi - lo + 1) * 4), bits, 1);
+        if (id < 0) {
+            id = find(tex, XXH3_64bits(clut, count * 4), bits, 1);
         }
         if (getenv("BT3_TEX_LOG") != NULL) { /* which textures a pack has and which it has not, by the name it would need */
-            fprintf(stderr, "texpack: %s %ux%u %u-bit %llx-%llx-%08x%s%s\n", path != NULL ? "found  " : "missing", tw, th, psm == 0x13 ? 8u : 4u,
-                    (unsigned long long)tex, (unsigned long long)XXH3_64bits(&clut[lo], (hi - lo + 1) * 4), bits, path != NULL ? " " : "",
-                    path != NULL ? path : "");
+            fprintf(stderr, "texpack: %s %ux%u %u-bit %llx-%llx-%08x%s%s\n", id >= 0 ? "found  " : "missing", tw, th, psm == 0x13 ? 8u : 4u,
+                    (unsigned long long)tex, (unsigned long long)XXH3_64bits(&clut[lo], (hi - lo + 1) * 4), bits, id >= 0 ? " " : "",
+                    id >= 0 ? sEntries[id].path : "");
         }
-        return path;
+        return id;
     }
 }
 
@@ -466,7 +498,7 @@ static int load_png(const char *path, TexPackImage *img) {
     return 1;
 }
 
-int TexPack_Load(const char *path, TexPackImage *img) {
+static int load(const char *path, TexPackImage *img) {
     size_t size = 0;
     uint8_t *f;
     uint32_t w, h, mips, flags, fourcc, bpp, blk, at = 128, level;
@@ -546,7 +578,162 @@ int TexPack_Load(const char *path, TexPackImage *img) {
     return 1;
 }
 
-void TexPack_Free(TexPackImage *img) {
+static void image_free(TexPackImage *img) {
     SDL_free(img->file);
     img->file = NULL;
 }
+
+static size_t image_bytes(const TexPackImage *img) {
+    size_t n = 0;
+    int level;
+    for (level = 0; level < img->levels; level++) {
+        n += img->bytes[level];
+    }
+    return n;
+}
+
+/* Called with sLock held: a file read, into its entry */
+static void store(uint32_t id, int ok, const TexPackImage *img) {
+    Entry *e = &sEntries[id];
+#ifdef BT3_UWP
+    if (ok) sStats.reads++;
+    else sStats.failures++;
+#endif
+    if (!ok) {
+        e->state = 3;
+        return;
+    }
+    e->img = *img;
+    e->held = image_bytes(img);
+    e->state = 2;
+    sHeld[sHeldCount++] = id;
+    sHeldBytes += e->held;
+}
+
+static int SDLCALL reader(void *unused) {
+    (void)unused;
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    for (;;) {
+        uint32_t id;
+        TexPackImage img;
+        int ok;
+#ifdef BT3_UWP
+        uint64_t read_start;
+#endif
+        SDL_LockMutex(sLock);
+        while (sHead == sTail) {
+            SDL_WaitCondition(sWake, sLock);
+        }
+        id = sQueue[sTail++ & (QUEUE - 1)];
+        SDL_UnlockMutex(sLock);
+#ifdef BT3_UWP
+        read_start = SDL_GetTicksNS();
+#endif
+        ok = load(sEntries[id].path, &img);
+        SDL_LockMutex(sLock);
+#ifdef BT3_UWP
+        sStats.fileReadNs += SDL_GetTicksNS() - read_start;
+#endif
+        store(id, ok, &img);
+        SDL_UnlockMutex(sLock);
+    }
+    return 0;
+}
+
+/* Over the budget: the files asked for longest ago leave memory, down to three quarters of it (not `keep`, the one
+   just asked for). Only this thread frees them; the reader only adds. Called with sLock held. */
+static void trim(uint32_t keep) {
+    while (sHeldBytes > sBudget / 4 * 3 && sHeldCount > 1) {
+        uint32_t i, old = sHeldCount;
+        for (i = 0; i < sHeldCount; i++) {
+            if (sHeld[i] != keep && (old == sHeldCount || sEntries[sHeld[i]].used < sEntries[sHeld[old]].used)) {
+                old = i;
+            }
+        }
+        if (old == sHeldCount) {
+            return;
+        }
+        {
+            Entry *e = &sEntries[sHeld[old]];
+            image_free(&e->img);
+            sHeldBytes -= e->held;
+            e->held = 0;
+            e->state = 0;
+#ifdef BT3_UWP
+            sStats.evictions++;
+#endif
+            sHeld[old] = sHeld[--sHeldCount];
+        }
+    }
+}
+
+int TexPack_Get(int id, TexPackImage *img) {
+    Entry *e;
+    int r;
+
+    if (id < 0 || (uint32_t)id >= sCount) {
+        return -1;
+    }
+    if (sSync < 0) {
+        const char *mb = getenv("BT3_PACK_MB");
+        sSync = getenv("BT3_PACK_SYNC") != NULL && atoi(getenv("BT3_PACK_SYNC")) != 0;
+        sBudget = mb != NULL && atoi(mb) > 0 ? (size_t)atoi(mb) << 20 : TEXPACK_BUDGET;
+        sHeld = malloc(sCount * sizeof(uint32_t));
+        sLock = SDL_CreateMutex();
+        sWake = SDL_CreateCondition();
+        if (!sSync && sHeld != NULL && sLock != NULL && sWake != NULL) {
+            sReader = SDL_CreateThread(reader, "bt3-texpack", NULL);
+        }
+        if (sReader == NULL) {
+            sSync = 1;
+        }
+    }
+    if (sHeld == NULL || sLock == NULL || sWake == NULL) {
+        return -1;
+    }
+    e = &sEntries[id];
+    SDL_LockMutex(sLock);
+    e->used = ++sTick;
+    if (e->state == 0 && sSync) {
+        TexPackImage read;
+#ifdef BT3_UWP
+        uint64_t read_start = SDL_GetTicksNS();
+#endif
+        int ok = load(e->path, &read);
+#ifdef BT3_UWP
+        sStats.fileReadNs += SDL_GetTicksNS() - read_start;
+#endif
+        store((uint32_t)id, ok, &read);
+    } else if (e->state == 0 && sHead - sTail < QUEUE) {
+        sQueue[sHead++ & (QUEUE - 1)] = (uint32_t)id;
+        e->state = 1;
+#ifdef BT3_UWP
+        sStats.queued++;
+#endif
+        SDL_SignalCondition(sWake);
+    }
+    r = e->state == 2 ? 1 : e->state == 3 ? -1 : 0;
+    if (r == 1) {
+#ifdef BT3_UWP
+        sStats.cacheHits++;
+#endif
+        *img = e->img;
+        trim((uint32_t)id);
+    }
+    SDL_UnlockMutex(sLock);
+    return r;
+}
+
+#ifdef BT3_UWP
+void TexPack_ReadStats(TexPackStats *stats) {
+    memset(stats, 0, sizeof(*stats));
+    if (sLock == NULL) return;
+    SDL_LockMutex(sLock);
+    *stats = sStats;
+    stats->heldBytes = sHeldBytes;
+    stats->pending = sHead - sTail;
+    stats->async = sReader != NULL;
+    memset(&sStats, 0, sizeof(sStats));
+    SDL_UnlockMutex(sLock);
+}
+#endif

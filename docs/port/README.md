@@ -2422,6 +2422,9 @@ least a few rows (in a small window the tab scrolls as a whole).
   SDL then delivers to that controller's motors.
 - `BT3_RUMBLE_TEST=1` lifts the game's rule "no vibration in a replay" (one line in `BtlChar_UpdateVibration`,
   under `#ifdef PORT`), so that a recorded fight can be used: the regression replay is a replay.
+- `BT3_RUMBLE_SLOW=<ms>` makes the test controller keep each vibration command waiting that long, as some real
+  ones do (a report: a friend's controller froze the game for seconds whenever it vibrated). While the test
+  controller is attached, the real ones are left out, so a test is never felt on one.
 
 **Verified, by numbers:**
 - replay01 with `BT3_RUMBLE_TEST=1 BT3_RUMBLE_LOG=1`: the first hit, at vertical blank 1250, gives large motor
@@ -2430,6 +2433,10 @@ least a few rows (in a small window the tab scrolls as a whole).
   `(58310, 65535)`, `(39217, 0)`, `(0, 0, 0)`, and the test controller received the same. With strength 50:
   `(24511, 32767)`, `(32251, 0)`, ... With vibration off, and with the settings window open: no call at all.
   Without `BT3_RUMBLE_TEST`: no command (the game's rule). 393 commands up to tick 500, all for player 1.
+- A slow controller, replay01 to tick 500 (393 commands): 37.0 s of running with the test controller answering at
+  once, 8 ms late (199 commands sent: one per 125 ms at most) and 60 ms late (3 sent, then vibration off for it,
+  with the notice); the line `tick 500 ... hp 36430 24070` the same in all three. Sent every one, 60 ms each would
+  have been 23.6 s of standing still.
 - The regression line (`tick 2111 ... hp 23050 0`) is the same with and without `BT3_RUMBLE_TEST`, headless and in
   a window with the commands going to the test controller.
 - Sticks, twelve runs (the port's computed value equalled the game's own record in every one). Original:
@@ -2598,6 +2605,17 @@ reach a fight. An "audio lengths" line was planned as an uncounted extra and has
 would have opened 65,201 files for a number that means nothing). The desync check added to net.c in the same
 change is the other half: the fingerprint says BEFORE a match that two data sets compute the same, the check
 says DURING one that they did not; a cause the fingerprint does not see (below) is caught there.
+
+**Before a match (2026-10-19).** Each copy sends its fingerprint to the other one in a packet of its own (`T_FPRINT`,
+net.c: `{MAGIC, 12, "1RPF", low half, high half}`) with the lobby's greeting and its answer (room codes, quick
+match, an address) and again while the session connects. When both know theirs and the two differ, there is no
+match: the lobby stops with "Your game data and the other player's are not the same..." (the host answers with its
+own, so both sides say so), and a session that got that far goes back to the menu with the same line. Until then
+two players with different discs (a modified image on one side) were matched, and the desync check ended the
+match a moment into the fight. Two copies with the same modified image have the same fingerprint and are let in.
+A copy that does not send it (0.1.37 and older) is let in as before; `NET_VERSION` stays. `BT3_TEST_FPRINT=<hex>`:
+testing, a copy claims that value. `BT3_LOBBY=direct:<port>` / `direct:<address>:<port>`: the lobby by address
+without its window (tests).
 
 ### Cache and cost
 
@@ -3468,3 +3486,88 @@ Sans Bold, Condensed Bold and Condensed ExtraBold, Noto Sans Bold), Fira Sans Co
 proportions and shapes. It is bundled (port/third_party/fonts/fira, SIL Open Font License 1.1, from Mozilla's Fira
 release 4.301) and first in fonts.tsv, so it is the font of those screens while the Menu font setting is on
 "Original". Saved choices are kept by the file's path, so adding it at the top moved no one's setting.
+
+## Online: a desync no longer ends the match; waits and slow frames in the log (2026-10-19)
+
+Players reported matches ending with "The two games no longer agree" (since 0.1.34, when the copies began to compare
+what they compute) and freezes of up to half a second ("waited 500 ms/s" on the meter) while both only walked.
+
+- **A desync is a warning.** When the copies' notes differ (`sync_check`) the player is told once ("your screen and
+  the other player's may now show different fights"), the meter says "desync since frame N", and the match goes on
+  as it did before 0.1.34. The log has the first differing blank and, as the session ends, how many comparisons
+  differed. F1 > "End an online match on a desync" (setting `net_desync_end`, or `BT3_NET_DESYNC_END=1`) ends it
+  instead, as 0.1.34 to 0.1.37 did. A copy of those releases still ends the match and says so to this one.
+- **Waits in the log.** A wait of 100 ms or more for the other player's input (rollback past its limit, or every
+  blank with rollback off) writes a line: how long, the blank, and what came meanwhile: input packets without the
+  blank this copy needs ("their game is behind this one") or nothing for most of the wait ("the line held it
+  back, or their game stood still"); at most 200 lines a session. The meter names the same per second ("the other
+  player's game is behind" / "nothing arrived from the other player").
+- **Slow frames in the log online.** In an online match a frame whose own work (the time waited for the other
+  player left out: `gPortNetWaitNs`) is 100 ms or more is reported without `BT3_GS_VERBOSE`, with the new textures
+  and pipelines it made. With both players' logs of one match, a wait on one side and a slow frame on the other at
+  the same moment say which machine it was; a wait with nothing arriving and no slow frame on the other side is
+  the line.
+- **Windows: bt3_log.txt.** Started from the Explorer or a shortcut (no terminal, no pipe), the program writes what
+  it says to `bt3_log.txt` next to it, the run before kept as `bt3_log_prev.txt`; nothing when that folder cannot
+  be written. From a terminal or the setup's pipe, as before.
+
+Tested (two copies on one machine, 40 ms each way, rollback 8): a desync claimed by one copy at blank 4000
+(`BT3_TEST_APART`): noted once at 3968, the match went on; with `BT3_NET_DESYNC_END=1` it ended on both copies at
+4005. One copy stopped twice for 0.6 s (`kill -STOP`): the other logged "waited 496 ms ... nothing came from them
+for 613 ms" and "waited 478 ms ...", its slow-frame lines giving 497 and 479 ms of it as waiting. The Windows log
+file is compiled (MinGW, syntax), not run.
+
+The online pause (2026-10-13, above), the cases its notes left open: four matches with player 2 opening the pause
+menu every 700 to 1100 blanks for 60 to 200 blanks (cursor moves, the skill list, sometimes Return to Main Menu)
+under random input of player 1, about 33,000 fight blanks: no difference in about 29,000 comparisons. Whether a
+transformation or an Ultimate Blast's cut scene began under an open menu was not checked.
+
+## Songs in mp3, wav and flac played as they are: miniaudio (2026-10-19)
+
+The conversion of dropped MP3s to ADX at start-up is gone (`port/src/gs/song_mp3.c`, and `port/third_party/dr_libs`
+with it).
+An added song in mp3, wav or flac is now decoded and mixed by **miniaudio** (`port/third_party/miniaudio`, 0.11.25;
+`port/src/gs/snd_ma.c`) beside the SDL output the ADX streams use; the game's own files are untouched.
+
+- Where it is intercepted: `port/src/gs/snd_adx.c` `start()`, the one place every BGM / map / voice / movie stream
+  is opened. A file whose first two bytes are not 0x8000 (the ADX mark) and that `PortMa_Format` accepts is handed
+  to `PortMa_Start`; everything else is decoded as before. No `Bgm_Play` call site changed, and an ADX (or a mod's
+  `.bin` that is really ADX) keeps the old path exactly.
+- Format: `PortMa_Format` accepts a name ending in `.mp3` / `.wav` / `.flac` (any case) or a file whose first bytes
+  say RIFF, fLaC, ID3 or a bare MP3 frame, so a mod file under another name (a `.bin` in `mods/`) is recognized too.
+- The player state is mirrored: volume (the same gain `snd_adx.c` computes for SDL, a11y percent and all), pan (one
+  figure from the two channel pans), pause / resume, and "has it ended" (`ADXT_GetStat` polls `ma_sound_at_end`; a
+  native stream loops when it is an added song or is on one of the two music players (0 BGM, 1 MAP), as the disc's
+  own track did; a native voice line or streaming effect (players 2..5) reports `PLAYEND`, so the game goes on).
+  `ADXT_SetOutputMono` is taken over at the next start (miniaudio cannot change a sounding stream's channel count
+  in place).
+- Volume (2026-10-19, reported: dropped-in songs sounded lighter than the game's own): both paths are given the same
+  figure (`player_gain`, from `ADXT_SetOutVol`) and miniaudio passes it through unchanged — measured in the offline
+  engine, a tone of 0.8000 in comes back 0.8000 out with pan 0 and spatialization off, a mono file too, and 1.5 gives
+  1.1999 and 2 gives 1.5999 (exactly the multiplier). So the difference is the file: the game's ADX music is mastered
+  loud and a file made outside the port usually is not. A native stream is lifted by `native_lift` (1.5 = +3.5 dB by
+  default); `BT3_MA_GAIN=<multiplier>` sets it, and above about 2 a file already near full scale clips, as the engine
+  does not compress.
+- Build options (the manual, section 2.7), set in `snd_ma.c` before the include: `MA_NO_ENCODING`,
+  `MA_NO_GENERATION`, `MA_NO_RESOURCE_MANAGER`. The last means a stream is decoded by the `ma_decoder` the port
+  owns, created into the engine with `ma_sound_init_from_data_source`; the resource manager and its job thread are
+  not built. The WAV, FLAC and MP3 decoders are kept. No extra link libraries (miniaudio loads its Windows and
+  macOS backends at run time; on Linux it needs only `-lpthread -ldl -lm`, already linked).
+- Song list: `plat_songs.c` scans the songs folder for `.adx`, `.mp3`, `.wav` and `.flac`, puts the four scans
+  together and sorts once by name; `songs.txt` may name any of the four. `PortSongs_Refresh` is kept (`menu_c_e.c`,
+  `menu_e_b.c` call it) but does nothing: nothing is converted in the background any more, so the list does not
+  change while the program runs.
+- The engine is made lazily, the first time a native stream starts, so a run with no native songs never opens a
+  second device; without a device every native start fails, as the ADX path without SDL's device reports a stopped
+  player.
+
+Checked: `snd_ma.c` compiles clean with miniaudio 0.11.25 and the port's flags; `snd_adx.c` and `plat_songs.c`
+pass the front end. Not yet run: a native song heard, the mixing of the two devices, and the release build.
+
+Merged (2026-10-21) with one addition: the `.adx` an earlier release's converter wrote next to an MP3 (its header
+has the mark `BT3:MP3` 1 at 0x30) is left out of the list while that MP3 is there, since the MP3 itself is now
+played: a player who had added MP3s saw every one twice. A `songs.txt` line that names such a copy plays the MP3.
+A copy whose MP3 is gone stays a song, and an ADX without the mark (made by hand, ffmpeg, add_song.py) is never
+left out. The files are not touched. Counted at start, four folders: MP3 + its copy + WAV + FLAC gave 3 songs
+(4 before); the copy alone 1; a hand-made ADX beside an MP3 of the same name 2; the list naming the copy 3. Heard
+(Linux): WAV and FLAC songs in a fight, and the MP3 beside its old ADX copy.

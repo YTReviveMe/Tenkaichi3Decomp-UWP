@@ -34,11 +34,13 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     nz = OUT / "gsnz.frag"
     nz.write_text((SRC / "gs.frag").read_text().replace("\n", "\n#define NO_FRAG_DEPTH\n", 1))
+    wb = OUT / "gswb.frag"
+    wb.write_text((SRC / "gs.frag").read_text().replace("\n", "\n#define NO_FRAG_DEPTH\n#define GS_BLOCK\n", 1))
     glslang = tool("glslangValidator")
     cross = tool("spirv-cross")
     dxc = tool("dxc")
     arrays = []
-    for source in sorted(SRC.glob("*.*")) + [nz]:
+    for source in sorted(SRC.glob("*.*")) + [nz, wb]:
         stage = source.suffix[1:]
         if stage not in ("vert", "frag"):
             continue

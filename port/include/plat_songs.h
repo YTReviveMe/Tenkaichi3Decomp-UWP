@@ -1,6 +1,6 @@
 /* Songs added to the music select: a manifest under the data root (<BT3_DATA>/songs/songs.txt), parsed once at
-   start-up. Every line `<file>|<display name>` adds one track as the next free music-list entry; the port serves
-   its ADX for a file id and the menu lists it (the same scheme as the added stages). */
+   start-up. A track is a file in the songs folder (an ADX, or an mp3/wav/flac played by miniaudio); the port
+   serves it for a file id and the menu lists it (the same scheme as the added stages). */
 #ifndef PORT_PLAT_SONGS_H
 #define PORT_PLAT_SONGS_H
 
@@ -20,7 +20,7 @@
                                                                                     : PORT_SONG_BGM_FIRST + (n))
 
 void PortSongs_Init(void);
-void PortSongs_Refresh(void);       /* before a select screen's music list is made: songs converted from MP3 since */
+void PortSongs_Refresh(void);       /* the select screens call it as they set up their music list: nothing to do now */
 int PortSongs_Count(void);
 int PortSongs_Offset(int index);    /* the music-list entry value of the index-th added track */
 

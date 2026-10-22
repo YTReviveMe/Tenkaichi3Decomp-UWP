@@ -1,8 +1,8 @@
 # Adding songs to the music select
 
 The port can **add tracks** to the music ("BGM") list shown in the menu. A song is an audio file (mp3, wav,
-ogg, flac…): the port serves it as the ADX the game plays and gives it its own entry in the list, with its
-name.
+flac, or the game's own ADX): the port gives it its own entry in the list, with its name, and plays it — an
+mp3/wav/flac as it is, through miniaudio; an ADX with the game's own decoder.
 
 Everything is driven by a **manifest** (`<data>/songs/songs.txt`) that the port reads at start-up. No code
 change and no environment variable is needed.
@@ -10,8 +10,9 @@ change and no environment variable is needed.
 
 ## Where they go (main line)
 
-A folder **`songs`** next to the game, like `textures`. Drop a `.adx` file in and it is used: its name in the
-menu is the file's name (`My_Song.adx` is shown as "My Song"). `$BT3_SONGS` names another folder.
+A folder **`songs`** next to the game, like `textures`. Drop an `.adx`, `.mp3`, `.wav` or `.flac` file in and it
+is used: its name in the menu is the file's name (`My_Song.adx` is shown as "My Song"). `$BT3_SONGS` names another
+folder.
 
 - The list (`songs.txt` in that folder, `file|Name In The Menu` per line) is optional: it gives other names and an
   order. Files it does not mention follow, by name without regard to case (the same order on every machine).
@@ -21,45 +22,24 @@ menu is the file's name (`My_Song.adx` is shown as "My Song"). `$BT3_SONGS` name
   rest of this document describes, is still used when there is none next to the game. The script now writes to
   the folder next to the game (the repository root) unless `--data` names another place.
 - Code: `port/src/plat_extras.c` (the folder, the scan), `plat_stages.c`, `plat_songs.c`.
-- **An `.mp3` works too** (2026-10-12, pull request 70; changed 2026-10-13, below): at start-up every `name.mp3`
-  that needs it is converted once and written as `name.adx` next to it; the next start finds the ADX and does
-  nothing. The MP3's own rate and channels are kept. A file that cannot be read or written (not an MP3, more than
-  two channels, a folder that cannot be written to) is left out: one line in the log and a notice over the picture
-  ("Song x.mp3 could not be converted and is left out."), and the game goes on. `songs.txt` may name the `.mp3`;
-  its `.adx` is used. Code: `port/src/gs/song_mp3.c` (dr_mp3 from `port/third_party/dr_libs`, public domain /
-  MIT-0, see the README.txt there for the exact origin, and an ADX encoder written against the decoder in
-  `snd_adx.c`).
-  Checked with the macOS build (branch macos-port, where it was written): a 6 s and an 8 s MP3 converted (decoded
-  with the port's own rounding, 21 dB and 55 dB against the MP3's samples; ffmpeg's `adpcm_adx` files of the same
-  MP3s give 16.5 dB and 30 dB there, why was not looked into), not converted again at the next start; a file of
-  junk named `.mp3` left out with the log line; the demo fight ran to its end. The release container compiles it
-  for Linux (`clang64`, linked) and Windows (`win64`, the file compiled). Not checked: the notice on screen, the
-  songs played in a fight, the program run on Linux or Windows.
-- **How the conversion decides and when it runs** (2026-10-13, the top of `song_mp3.c` has the whole of it):
-  - The ADX written carries a mark in its header (0x60 bytes; at 0x30 `BT3:MP3\x01`, then the MP3's size and its
-    time of last change, 8 bytes each). No `name.adx`: converted. Mark with the MP3's size and time: nothing. Mark
-    with another size or time: converted again (a replaced MP3, whatever its date). **No mark: the ADX is somebody
-    else's (made by hand, by ffmpeg, by `add_song.py`) and is never written over**; the MP3 is left alone, the log
-    says so. An ADX written by the pull request before this change has no mark and counts as made by hand: delete
-    it to have it made again.
-  - An MP3 that cannot be decoded is written down in `mp3-failed.txt` in the folder (size, time, name, reason) and
-    not tried or reported again until the file changes or its line is deleted. A failure to write (the folder, the
-    disk) is not written down and is tried at every start.
-  - It runs in a thread of its own; the program does not wait. The song list is made at start from the ADX files
-    there are; a song converted later joins the END of the list when a character select is next set up
-    (`PortSongs_Refresh`, called from `menu_c_e.c` and `menu_e_b.c`), so its place can differ from the next start's
-    (there the list's order is `songs.txt`, then by name). Not in an online session. With `BT3_PAD_REC`,
-    `BT3_PAD_PLAY`, `BT3_PAD_TABLE` or `BT3_SYNCTEST` the conversion is done at start before the list is made, so
-    that such a run's list depends on the folder only. `BT3_TEST_SONGS_SLOW=<ms>` makes every conversion wait
-    first (testing).
-  - The MP3 is decoded and written 8192 samples at a time: about 14 MB for the whole program in a test whatever the
-    length (an hour of music took 622 MB decoded whole).
-  - Names: `.mp3` in any case of the letters; `a.b.mp3` gives `a.b.adx`; names of 128 bytes and more are left out
-    (the list does not take them either); of two MP3 files that give the same ADX name the first by name is
-    converted and the other left out, the same one at every start. On Windows a name with characters outside the
-    system's code page cannot be opened by this program (files are opened by the code page's names everywhere in
-    the port) and is left out with a line in the log; names inside the code page (accents on a western system) work.
-  - Deleting an MP3 does not delete its ADX: the song stays until the ADX is deleted too.
+- **mp3, wav and flac are played as they are** (2026-10-19): a file in one of those three formats is decoded and
+  mixed by **miniaudio** (`port/src/gs/snd_ma.c`, `port/third_party/miniaudio`) instead of being converted to ADX
+  at start-up. There is no conversion pass, no `.adx` written next to the file, and no `mp3-failed.txt`: a file
+  that cannot be read is left out with one line in the log. An added song is in the list from the next start (the
+  folder is read once, at start); `PortSongs_Refresh` is kept for the game's select screens but does nothing. The
+  game's own files and any `.adx` are untouched: they stay on the ADX path (`port/src/gs/snd_adx.c`), which asks
+  `PortMa_Format` whether a starting file is one of the three formats and only then hands it to miniaudio. An added
+  song is played round and round, as before (`PortSongs_IsFile`), whether it is an ADX or a native file. Not
+  carried over to a native stream: the game's speed time-stretch (`music_follows_speed`) and the stereo/mono
+  option, which take effect the next time the stream starts. The engine (its own device, beside SDL's for the ADX
+  streams) is made the first time a native stream starts, so a run with none never touches it. The old converter
+  (`port/src/gs/song_mp3.c`) and its decoder (`port/third_party/dr_libs`) are gone.
+- **Volume** (2026-10-19): a native stream is given the same figure the ADX path is (`ADXT_SetOutVol` → `player_gain`)
+  and miniaudio passes it through unchanged — measured, a tone of 0.8000 read through the engine comes back 0.8000
+  out, with pan 0 and spatialization off, mono file included. So a song that still sounds quieter than the game's own
+  is mastered quieter: the game's ADX music is loud and a file dropped in from outside usually is not. A native stream
+  is therefore lifted **1.5x (+3.5 dB)**. `BT3_MA_GAIN=<n>` sets it (a multiplier: 1 is off, 2 is twice as loud). Above
+  about 2 a file already near full scale clips, as the engine does not compress.
 
 ## The name in the game's own lettering (main line)
 
@@ -129,7 +109,9 @@ port/tools/add_song.py rebuild
 ```
 
 `add` **converts the audio to ADX** with `ffmpeg` (24000 Hz, stereo — like the game's own tracks), copies it
-into `gamedata/songs/`, adds the line to the manifest and **regenerates the name strip** (`names.rgba`).
+into `gamedata/songs/`, adds the line to the manifest and **regenerates the name strip** (`names.rgba`). It is
+only needed when you want the game's own ADX format or a generated name strip: an mp3, wav or flac can be dropped
+in the folder as it is.
 
 | option | effect |
 |---|---|
@@ -151,6 +133,8 @@ outline, shadow, left-aligned) lives in the constants of `port/tools/add_song.py
 ---
 
 ## Manual use
+
+An mp3, wav or flac needs none of this: drop it in the folder and it is played. For an ADX:
 
 1. Convert the audio to ADX: `ffmpeg -i Song.mp3 -ar 24000 -ac 2 -c:a adpcm_adx my_song.adx`.
 2. Copy the `.adx` into `gamedata/songs/`.
@@ -210,14 +194,17 @@ still pending. The same mechanism serves the **Map Select**, where the name goes
 
 ## Replacing a disc track
 
-That already works through the mods mechanism: just put the ADX at `gamedata/mods/pzs3us2/<index>.bin` (e.g.
-`64974.bin` is track 0). Nothing from the port is needed.
+That already works through the mods mechanism: just put the file at `gamedata/mods/pzs3us2/<index>.bin` (e.g.
+`64974.bin` is track 0). An ADX needs nothing from the port; an mp3, wav or flac is recognized by its first bytes
+even under a `.bin` name and played by miniaudio. A native file on one of the two music players (BGM and MAP)
+plays round and round like the track it replaced; a native voice line or streaming effect plays once and reports
+its end, as the game waits for those.
 
 ## Limits and notes
 
 - **40 added songs** at most (see the end of this file; it was 6).
-- The audio is converted to **ADX** (ffmpeg `adpcm_adx`). The game plays it with its ADX decoder; other
-  formats make no sound.
+- An mp3, wav or flac is played as it is (miniaudio); an ADX with the game's own decoder. Anything else (ogg,
+  m4a…) makes no sound; convert it first.
 - The music list is a **reel**: the added ones appear before Random.
 - The overlay runs on **Vulkan (SDL_GPU)**. On OpenGL the game font's text is used.
 

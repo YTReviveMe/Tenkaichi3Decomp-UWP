@@ -7,6 +7,8 @@
 /* Windows: the exception code, the faulting address and the return addresses on the stack. The program is linked
    at a fixed address (0x20000000), so the numbers can be looked up in bt3.exe.map of the same build. */
 #include <windows.h>
+#include <io.h>
+#include <wchar.h>
 #include <stdint.h>
 #include <stdio.h>
 extern const char *Port_DataSummary(void); /* plat_verify.c */
@@ -124,6 +126,24 @@ __attribute__((constructor(101))) static void crash_init(void) {
     if (GetStdHandle(STD_OUTPUT_HANDLE) == NULL && AttachConsole(ATTACH_PARENT_PROCESS)) {
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
+    } else if (GetStdHandle(STD_ERROR_HANDLE) == NULL) {
+        /* Started from the Explorer or a shortcut: no terminal and no pipe, and what the program says would be lost.
+           It goes to bt3_log.txt next to the program instead (the run before kept as bt3_log_prev.txt), so that a
+           report can carry it. Nothing when that folder cannot be written. */
+        wchar_t path[MAX_PATH + 32], prev[MAX_PATH + 32];
+        DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH);
+        while (n > 0 && path[n - 1] != L'\\' && path[n - 1] != L'/') {
+            n--;
+        }
+        if (n > 0) {
+            wcscpy(path + n, L"bt3_log.txt");
+            wcscpy(prev, path);
+            wcscpy(prev + n, L"bt3_log_prev.txt");
+            MoveFileExW(path, prev, MOVEFILE_REPLACE_EXISTING);
+            if (_wfreopen(path, L"w", stderr) != NULL) {
+                _dup2(_fileno(stderr), _fileno(stdout));
+            }
+        }
     }
     /* nothing held back in a buffer: what was printed before a crash is in the log */
     setvbuf(stdout, NULL, _IONBF, 0);

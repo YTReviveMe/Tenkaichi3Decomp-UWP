@@ -6,7 +6,7 @@
 #define TEXPACK_MAX_LEVELS 14
 
 typedef struct TexPackImage {
-    uint8_t *file;                            /* the whole file (TexPack_Free) */
+    uint8_t *file;                            /* the whole file */
     uint32_t w, h;
     int format;                               /* 0: 8-bit R, G, B, A; 1, 2, 3: DXT1, DXT3, DXT5 */
     int levels;
@@ -16,13 +16,24 @@ typedef struct TexPackImage {
 
 void TexPack_Init(void);  /* looks through the folder once */
 int TexPack_Count(void);
-/* The file for the texture the GS registers describe (as it lies in GS memory now), or NULL. *maxAlpha: the largest
+/* The replacement for the texture the GS registers describe (as it lies in GS memory now), or -1. *maxAlpha: the largest
    alpha byte the original texture has. The game uses bit 7 of the alpha it writes into the picture as a mask for
    later draws (a texture whose alpha stays at 0x7F never sets it); a replacement's alpha is redrawn and compressed
    and strays over 0x80 in places, so the renderer keeps it at or below the original's largest value. */
-const char *TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t tcc, uint32_t cbp, uint32_t cpsm,
-                           uint32_t *maxAlpha);
-int TexPack_Load(const char *path, TexPackImage *img);
-void TexPack_Free(TexPackImage *img);
+int TexPack_Lookup(uint32_t tbp, uint32_t tbw, uint32_t psm, uint32_t tw, uint32_t th, uint32_t tcc, uint32_t cbp, uint32_t cpsm,
+                   uint32_t *maxAlpha);
+const char *TexPack_Path(int id);
+/* Replacement `id`'s pixels: 1 and *img (kept by the pack: valid until the next call), 0 while the file is still
+   being read (in the background: ask again later), -1 if it cannot be read. */
+int TexPack_Get(int id, TexPackImage *img);
+
+#ifdef BT3_UWP
+typedef struct TexPackStats {
+    uint64_t fileReadNs, heldBytes;
+    unsigned reads, failures, evictions, queued, cacheHits, pending;
+    int async;
+} TexPackStats;
+void TexPack_ReadStats(TexPackStats *stats);
+#endif
 
 #endif

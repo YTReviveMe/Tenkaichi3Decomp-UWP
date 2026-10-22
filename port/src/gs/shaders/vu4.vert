@@ -19,10 +19,13 @@ layout(set = 1, binding = 0) uniform U {
     vec4 light;
     vec4 color0, color1;
     vec4 misc;           // x, y: XYOFFSET in pixels, z: depth maximum
+    vec4 light2;
+    vec4 target;         // x: GS pixels per texel of the target (gs_draw.c target_lowres; 0 = 1)
 } u;
 void main() {
     vec4 s = u.screen * inPos;
-    gl_Position = vec4((s.x - u.misc.x * s.w) / 512.0 - s.w, s.w - (s.y - u.misc.y * s.w) / 512.0, s.z / abs(u.misc.z), s.w);
+    float tx = u.target.x > 0.0 ? 512.0 * u.target.x : 512.0; // (a work buffer at the PS2's resolution: its corner)
+    gl_Position = vec4((s.x - u.misc.x * s.w) / tx - s.w, s.w - (s.y - u.misc.y * s.w) / tx, s.z / abs(u.misc.z), s.w);
     // The vertex program hands the GS a whole-number depth (it converts s.z / s.w to an integer), and the GS
     // compares whole numbers at every pixel (gs.frag). Here: that whole number plus a half, so that what is
     // interpolated between vertices never sits on the edge between two whole numbers.

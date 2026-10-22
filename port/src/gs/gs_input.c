@@ -355,11 +355,16 @@ void PortInput_Save(void) {
 
 /* Testing without a controller or a person. BT3_STICK_TEST="lx,ly,rx,ry[,lt,rt]" (the sticks -32768..32767, + =
    right / down; the triggers 0..32767) and BT3_RUMBLE_LOG=1 each attach a controller made by SDL itself ("virtual"),
-   which becomes controller 1: its sticks are held at those values, and what SDL hands its motors is printed. The
-   rest of the program does not know it from a real one. */
+   which becomes controller 1 and the only one (the real ones are left out): its sticks are held at those values,
+   and what SDL hands its motors is printed (BT3_RUMBLE_SLOW=ms: it keeps the caller waiting that long). The rest of
+   the program does not know it from a real one. */
 static bool SDLCALL test_pad_rumble(void *userdata, Uint16 low, Uint16 high) {
+    const char *slow = getenv("BT3_RUMBLE_SLOW"); /* ms the controller keeps the caller waiting (a slow one) */
     (void)userdata;
     fprintf(stderr, "rumble: the test controller's motors: low %u, high %u\n", low, high);
+    if (slow != NULL) {
+        SDL_Delay((Uint32)atoi(slow));
+    }
     return true;
 }
 
@@ -444,6 +449,9 @@ static void pads_refresh(void) {
 #endif
     sIdCount = 0;
     for (i = 0; ids != NULL && i < n && sIdCount < MAX_PADS; i++) {
+        if (sTestPad != NULL && !SDL_IsJoystickVirtual(ids[i])) {
+            continue; /* (a test is never felt on a real controller) */
+        }
         sIds[sIdCount++] = ids[i];
     }
     SDL_free(ids);
@@ -774,16 +782,34 @@ void PortInput_StickView(int player, PortStickView *out) {
  * RUMBLE_MS to live, so a controller is never left humming by a game that stopped coming here; and the
  * controllers are stopped as the program ends.
  *
+ * A command is sent on the game's frame, and some controllers keep the caller waiting for it (generic pads through
+ * DirectInput, some Bluetooth links): 30 of them a second of 50 ms each and the game stands still. Each call is
+ * timed: a controller that takes RUMBLE_SLOW_NS or more is sent at most one command per ten times its longest call
+ * (each living long enough to reach the next), and one that takes RUMBLE_OFF_NS or more twice (once could be the
+ * system's own pause) is not sent any more until another controller is this player's, with a notice and a line in
+ * the log.
+ *
  * Nothing here is seen by the game: two bytes are read, nothing is written and the result is the constant it
  * always was. A fight, a recording of one and both sides of an online match are the same with it on or off. Online,
  * both ports' commands are computed on both sides: only this side's (Port_NetMe) are felt, on player 1's
  * controller, which is the one that plays there.
  */
 #define RUMBLE_MS 250
-static struct { SDL_Gamepad *pad; Uint16 low, high; Uint64 at; int lastLarge, lastSmall; } sRumble[2];
+#define RUMBLE_SLOW_NS 4000000ull /* 4 ms */
+#define RUMBLE_OFF_NS 50000000ull /* 50 ms */
+static struct {
+    SDL_Gamepad *pad;
+    Uint16 low, high;
+    Uint64 at;
+    int lastLarge, lastSmall;
+    Uint64 cost; /* the controller's longest call, ns (0: never slow) */
+    int stalls;  /* its calls of RUMBLE_OFF_NS or more */
+    int off;     /* the controller held the game up: nothing more is sent to it */
+} sRumble[2];
 
 static void rumble_send(int player, SDL_Gamepad *g, Uint16 low, Uint16 high, int why) {
-    Uint64 now = SDL_GetTicks();
+    Uint64 now = SDL_GetTicks(), gap, took;
+    int ms = RUMBLE_MS;
 
     if (sRumble[player].pad != g && sRumble[player].pad != NULL && (sRumble[player].low | sRumble[player].high) != 0) {
         int k; /* another controller became this player's: the old one, if it is still there, is stopped */
@@ -794,8 +820,26 @@ static void rumble_send(int player, SDL_Gamepad *g, Uint16 low, Uint16 high, int
         }
         sRumble[player].low = sRumble[player].high = 0;
     }
+    if (sRumble[player].pad != g) {
+        sRumble[player].cost = 0;
+        sRumble[player].stalls = 0;
+        sRumble[player].off = 0;
+    }
     sRumble[player].pad = g;
-    if (low == sRumble[player].low && high == sRumble[player].high && ((low | high) == 0 || now - sRumble[player].at < RUMBLE_MS / 2)) {
+    if (sRumble[player].off) {
+        return;
+    }
+    if (sRumble[player].cost >= RUMBLE_SLOW_NS) { /* a slow controller: one command per ten times its longest call */
+        gap = sRumble[player].cost * 10 / 1000000;
+        if (gap < RUMBLE_MS / 2) {
+            gap = RUMBLE_MS / 2;
+        }
+        if (now - sRumble[player].at < gap) {
+            return;
+        }
+        ms = (int)gap + RUMBLE_MS;
+    }
+    if (low == sRumble[player].low && high == sRumble[player].high && ((low | high) == 0 || now - sRumble[player].at < (Uint64)ms / 2)) {
         return; /* (the same again: only said again before it would run out) */
     }
     if (getenv("BT3_RUMBLE_LOG") != NULL) {
@@ -803,10 +847,25 @@ static void rumble_send(int player, SDL_Gamepad *g, Uint16 low, Uint16 high, int
         static const char *const whys[] = {"", " (the settings window is open)", " (the window is not in use)", " (vibration is off)"};
         fprintf(stderr, "rumble: vblank %u, player %d: small %d, large %d/127 -> %s(low %u, high %u, %d ms)%s\n", gPortVBlanks, player + 1,
                 sRumble[player].lastSmall, sRumble[player].lastLarge, g != NULL ? "SDL_RumbleGamepad" : "no controller", low, high,
-                (low | high) != 0 ? RUMBLE_MS : 0, whys[why]);
+                (low | high) != 0 ? ms : 0, whys[why]);
     }
     if (g != NULL) {
-        SDL_RumbleGamepad(g, low, high, (low | high) != 0 ? RUMBLE_MS : 0);
+        took = SDL_GetTicksNS();
+        SDL_RumbleGamepad(g, low, high, (low | high) != 0 ? ms : 0);
+        took = SDL_GetTicksNS() - took;
+        if (took >= RUMBLE_OFF_NS && ++sRumble[player].stalls >= 2) {
+            extern void Port_UiNotice(const char *text);
+            sRumble[player].off = 1;
+            fprintf(stderr, "rumble: player %d's controller (%s) took %llu ms for a vibration command: vibration is off for it\n",
+                    player + 1, SDL_GetGamepadName(g) != NULL ? SDL_GetGamepadName(g) : "?", (unsigned long long)(took / 1000000));
+            Port_UiNotice("Vibration turned off: the controller held the game up");
+        } else if (took >= RUMBLE_SLOW_NS && took > sRumble[player].cost) {
+            if (sRumble[player].cost == 0) {
+                fprintf(stderr, "rumble: player %d's controller (%s) took %.1f ms for a vibration command: fewer are sent\n", player + 1,
+                        SDL_GetGamepadName(g) != NULL ? SDL_GetGamepadName(g) : "?", (double)took / 1e6);
+            }
+            sRumble[player].cost = took;
+        }
     }
     sRumble[player].low = low;
     sRumble[player].high = high;

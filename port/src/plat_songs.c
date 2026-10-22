@@ -1,5 +1,6 @@
 /* The manifest of songs added to the music select (see plat_songs.h). Runs at start-up: it gives the game the
-   added tracks' list offsets and names, and the file layer where their ADX files live. */
+   added tracks' list offsets and names, and the file layer where their files live. */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,10 +42,16 @@ static char sFiles[PORT_SONG_MAX][128];
 extern int PortExtras_Dir(const char *kind, const char *env, char *out, unsigned size);
 extern int PortExtras_Scan(const char *dir, const char *ext, char names[][128], int max);
 extern void PortExtras_NameFromFile(const char *file, char *name, unsigned size);
-extern void PortSongs_Mp3Start(const char *dir); /* gs/song_mp3.c: the folder's MP3 files, written as ADX in the background */
-extern int PortSongs_Mp3Made(void);              /* how many it has written so far */
 
 void PortSongs_Init(void);
+
+/* The order the files it does not mention follow: by name without regard to case, as PortExtras_Scan sorts them. */
+static int song_cmp(const void *a, const void *b) {
+    const unsigned char *x = a, *y = b;
+    for (; *x != '\0' && tolower(*x) == tolower(*y); x++, y++) {
+    }
+    return tolower(*x) != tolower(*y) ? tolower(*x) - tolower(*y) : strcmp((const char *)a, (const char *)b);
+}
 
 const char *PortSongs_Dir(void) {
     PortSongs_Init(); /* (the overlay may ask before the game has started) */
@@ -81,6 +88,43 @@ static void add_song(const char *file, const char *name) {
     gPortSongCount++;
 }
 
+/* The ADX that earlier releases wrote next to an MP3 they converted (the mark "BT3:MP3" 1 at 0x30 of its header):
+   the MP3 beside it is now played as it is, and the copy would be the same song in the list a second time. 1 when
+   `file` is such a copy and its MP3 is still there (`mp3` gets the MP3's name, any case of ".mp3", as the converter
+   took it); a copy without its MP3 is a song like any other ADX, and an ADX made by hand or by ffmpeg has no mark.
+   The file is left where it is. */
+static int converted_copy(const char *file, char *mp3, unsigned size) {
+    static const char kMark[8] = {'B', 'T', '3', ':', 'M', 'P', '3', 1};
+    char path[512];
+    unsigned char h[0x38];
+    size_t l = strlen(file);
+    FILE *fp;
+    int c, got;
+
+    if (l <= 4 || l + 1 > size || file[l - 4] != '.' || tolower((unsigned char)file[l - 3]) != 'a' || tolower((unsigned char)file[l - 2]) != 'd' ||
+        tolower((unsigned char)file[l - 1]) != 'x') {
+        return 0;
+    }
+    snprintf(path, sizeof(path), "%s/%s", sDir, file);
+    if ((fp = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    got = fread(h, 1, sizeof(h), fp) == sizeof(h);
+    fclose(fp);
+    if (!got || h[0] != 0x80 || h[1] != 0 || memcmp(h + 0x30, kMark, sizeof(kMark)) != 0) {
+        return 0;
+    }
+    for (c = 0; c < 4; c++) { /* (.mp3 .mP3 .Mp3 .MP3: on Linux the disk tells them apart) */
+        snprintf(mp3, size, "%.*s.%c%c3", (int)(l - 4), file, c & 2 ? 'M' : 'm', c & 1 ? 'P' : 'p');
+        snprintf(path, sizeof(path), "%s/%s", sDir, mp3);
+        if ((fp = fopen(path, "rb")) != NULL) {
+            fclose(fp);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Reads the folder and adds the songs that are not in the list yet, at its end: a song keeps its place (the game
    holds the place's number while a fight with that music is set up and runs). */
 static void collect(void) {
@@ -101,39 +145,41 @@ static void collect(void) {
             continue;
         }
         *bar = '\0';
+        /* The line may name an ADX, an mp3, a wav or a flac: the file it names is the one played (gs/snd_ma.c for
+           the last three), the MP3 for a converted copy of one (a list written for the converter's ADX). */
         {
-            /* a list line may name the MP3: its ADX is the file, and none means the MP3 could not be converted */
-            char *file = trim(line), adx[160];
-            size_t l = strlen(file);
-            if (l > 4 && l < sizeof(adx) && file[l - 4] == '.' && (file[l - 3] | 0x20) == 'm' && (file[l - 2] | 0x20) == 'p' &&
-                file[l - 1] == '3') { /* ".mp3" in any case of the letters, as the converter takes it (".Mp3" was listed as a song) */
-                FILE *f;
-                snprintf(adx, sizeof(adx), "%.*s.adx", (int)(l - 4), file);
-                snprintf(path, sizeof(path), "%s/%s", sDir, adx);
-                if ((f = fopen(path, "rb")) == NULL) {
-                    continue;
-                }
-                fclose(f);
-                file = adx;
-            }
-            add_song(file, trim(bar + 1));
+            char *file = trim(line), mp3[128];
+            add_song(converted_copy(file, mp3, sizeof(mp3)) ? mp3 : file, trim(bar + 1));
         }
     }
     if (fp != NULL) {
         fclose(fp);
     }
     {
-        static char found[64][128];
-        int n = PortExtras_Scan(sDir, ".adx", found, 64), k;
+        /* Everything else in the folder, of any of the formats the port plays, by name. The four scans' names are
+           put together and sorted once, so the order does not depend on the extension. */
+        static const char *exts[] = { ".adx", ".mp3", ".wav", ".flac" };
+        static char found[PORT_SONG_MAX * 4][128];
+        static char one[64][128];
+        int n = 0, e, k;
+
+        for (e = 0; e < (int)(sizeof(exts) / sizeof(exts[0])); e++) {
+            int m = PortExtras_Scan(sDir, exts[e], one, 64), j;
+            for (j = 0; j < m && n < (int)(sizeof(found) / sizeof(found[0])); j++) {
+                snprintf(found[n++], 128, "%s", one[j]);
+            }
+        }
+        qsort(found, (size_t)n, 128, song_cmp);
         for (k = 0; k < n; k++) {
-            char name[64];
+            char name[64], mp3[128];
+            if (converted_copy(found[k], mp3, sizeof(mp3))) {
+                continue; /* (its MP3 is in the list instead) */
+            }
             PortExtras_NameFromFile(found[k], name, sizeof(name));
             add_song(found[k], name);
         }
     }
 }
-
-static int sMadeSeen; /* PortSongs_Mp3Made() when the folder was last read */
 
 void PortSongs_Init(void) {
     if (sDone) {
@@ -143,34 +189,16 @@ void PortSongs_Init(void) {
     if (!PortExtras_Dir("songs", "BT3_SONGS", sDir, sizeof(sDir))) {
         return;
     }
-    PortSongs_Mp3Start(sDir);
-    sMadeSeen = PortSongs_Mp3Made(); /* (taken before the folder is read: a song finished meanwhile is looked for again) */
     collect();
     if (gPortSongCount > 0) {
         fprintf(stderr, "bt3: songs: %d added from %s\n", gPortSongCount, sDir);
     }
 }
 
-/* The songs whose conversion from MP3 has finished since the list was last made join it (song_mp3.c). Called by
-   the game when it sets up a select screen's music list (src/menu/menu_c_e.c, menu_e_b.c), on the game's thread:
-   the list does not change at any other time, and not in an online session, where added songs are not offered and
-   nothing the two copies might not share is to change. */
+/* Kept for the game's select screens (src/menu/menu_c_e.c, menu_e_b.c), which took in the songs a background
+   conversion had finished. Nothing is converted any more: the folder is read once, at start, and a song in it is
+   played as it is (gs/snd_ma.c), so the list does not change while the program runs. */
 void PortSongs_Refresh(void) {
-    extern int Port_NetSession(void); /* gs/net.c */
-    int made, had = gPortSongCount;
-
-    if (!sDone || sDir[0] == '\0' || Port_NetSession()) {
-        return;
-    }
-    made = PortSongs_Mp3Made();
-    if (made == sMadeSeen) {
-        return;
-    }
-    sMadeSeen = made;
-    collect();
-    if (gPortSongCount > had) {
-        fprintf(stderr, "bt3: songs: %d more converted from MP3, %d added now\n", gPortSongCount - had, gPortSongCount);
-    }
 }
 
 const char *PortSongs_Name(int index) {

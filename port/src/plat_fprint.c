@@ -19,7 +19,8 @@
  *
  * It runs on the data check's thread (plat_verify.c), is printed in the log, and is kept per file in
  * <root>/.fingerprint with the file's size and time, so a later start only looks at those. Nothing is enforced
- * here and nothing is sent anywhere: Port_DataFingerprint() is what later steps ask.
+ * here: Port_DataFingerprint() is what later steps ask (gs/net.c sends it to the other player before a match,
+ * and two that differ are not matched).
  * (Its variables are not part of the game's saved state: port/tools/make_state.py lists the files that are.)
  */
 #include <stdint.h>

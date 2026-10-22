@@ -32,6 +32,11 @@ Six ADXT players (2 channels each, server frequency 30), created at startup:
 - Character voice lines: file id `chara * 100 + line + 0x8D4E`, or `+ 0xCC32` when bit 0 of the
   save flags is set (see save_data.md).
 
+For a port: the CRI ADXT library these calls name is replaced by the port's own (`port/src/gs/snd_adx.c`: an ADX
+decoder feeding one SDL audio stream per player). A song or sound mod from outside the disc in mp3, wav or flac is
+played as it is instead, by miniaudio (`port/src/gs/snd_ma.c`); the file is told apart from the game's own ADX by
+its first bytes, so the whole of the disc stays on the ADX path. See docs/port/adding_songs.md.
+
 ## Sound effects: SOUNDS.IRX (game side verified; what the driver does is inferred)
 
 ### Model

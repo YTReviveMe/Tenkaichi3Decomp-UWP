@@ -1626,6 +1626,13 @@ void StgFog_ResetColor(void) {
    s7 by local allocation; 0xE re-materialised twice). With literals, or with only some of the four as
    variables, the same instructions come out in another schedule (88 of 230). The TEX0 word is
    `tbp | fbw << 14 | tw << 26 | th << 30` in that order, with tw declared before th. */
+#ifdef PORT
+extern void Port_GsMarker(s32 effect); /* port/src/gs_marker.c */
+/* The PC renderer draws page 0x150 at the PS2's resolution between these (gs_draw.c target_lowres): the blur is the
+   half-size copy stretched back, and at a higher internal resolution the copy kept the detail and blurred nothing. */
+#define PORT_LOWRES_BEGIN 0x20
+#define PORT_LOWRES_END 0x21
+#endif
 void StgFog_Draw(void) {
     StgFog *tone = gStgFog;
     u64 *p;
@@ -1634,6 +1641,9 @@ void StgFog_Draw(void) {
     s32 srcH = 0x1C0;
     s32 h = 0xE0;
 
+#ifdef PORT
+    Port_GsMarker(PORT_LOWRES_BEGIN);
+#endif
     Dma_AddData(tone->load, 0x10);
     Dma_AddTexFlush();
     Dma_AddFrame(!(gGfx.frame & 1) ? 0x70 : 0, 8, 0xFFFFFF);
@@ -1683,6 +1693,9 @@ void StgFog_Draw(void) {
         Dma_PutTexStrips((GsQword **)&p, 0, 0, width, srcH, 0, 0, 0, 0, half, h, 8, 8, 0x80808080, 1);
         Dma_EndDirect(p);
     }
+#ifdef PORT
+    Port_GsMarker(PORT_LOWRES_END);
+#endif
 }
 
 /* Takes the three control points from the stage's parameters (defaults when NULL) and rebuilds the table. */
