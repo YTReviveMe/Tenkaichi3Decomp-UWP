@@ -86,7 +86,6 @@ if(BT3_GAME)
         "/WINMDFILE:${CMAKE_CURRENT_BINARY_DIR}/Tenkaichi3DecompUWP.winmd"
         "/MAP:${CMAKE_CURRENT_BINARY_DIR}/Tenkaichi3DecompUWP.map"
         /BASE:0x20000000 /DYNAMICBASE /HIGHENTROPYVA:NO /LARGEADDRESSAWARE:NO /STACK:0x1000000)
-    # ADDR32 tables require /LARGEADDRESSAWARE:NO at link time; restore it afterward.
     get_filename_component(bt3_linker_dir "${CMAKE_LINKER}" DIRECTORY)
     find_program(bt3_editbin NAMES editbin.exe PATHS "${bt3_linker_dir}" NO_DEFAULT_PATH REQUIRED)
     add_custom_command(TARGET bt3_uwp_game POST_BUILD

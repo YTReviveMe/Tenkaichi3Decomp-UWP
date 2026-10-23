@@ -77,7 +77,7 @@ static uint64_t gpu_now(void) { return SDL_GetTicksNS(); }
 #define SHADER_FORMAT SDL_GPU_SHADERFORMAT_DXIL
 #define SHADER_ENTRY "main"
 #define SHADER_CODE(name) name##Dxil, sizeof(name##Dxil)
-#elif defined(__APPLE__) /* Metal: the shaders as MSL (undefined.py translates the SPIR-V with spirv-cross, entry point main0) */
+#elif defined(__APPLE__)
 #define SHADER_FORMAT SDL_GPU_SHADERFORMAT_MSL
 #define SHADER_ENTRY "main0"
 #define SHADER_CODE(name) name##Msl, sizeof(name##Msl) - 1
@@ -580,7 +580,6 @@ static int vk_init(void) {
     int i;
 
 #ifdef BT3_UWP
-    /* SDL_Init runs again after setup. */
     SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_WGI, "1", SDL_HINT_OVERRIDE);
 #endif
     GPU_TRACE("GPU: initializing SDL video");
@@ -606,7 +605,7 @@ static int vk_init(void) {
         fprintf(stderr, "bt3: shadow stencil unavailable; flat shadows may show overlapping model parts\n");
     }
     GPU_TRACE("GPU: creating gameplay window");
-    sWindow = GsDraw_WindowCreate(0); /* the shared window: shape, display and full screen decided there */
+    sWindow = GsDraw_WindowCreate(0);
     if (sWindow == NULL || !SDL_ClaimWindowForGPUDevice(sDev, sWindow)) {
         fprintf(stderr, "bt3: no GPU window: %s\n", SDL_GetError());
         return 0;

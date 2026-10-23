@@ -34,10 +34,10 @@ def compile_one(source):
                 "-include", "port_libm.h", "-include", "vu0_names.h"]
     if source.name == "stdio.c" and source.parent == ROOT / "port/uwp":
         cmd.append("-DBT3_UWP_STDIO_IMPLEMENTATION")
-    result = subprocess.run(cmd + [str(source), "-o", str(obj)],
-                            cwd=ROOT, capture_output=True, text=True)
-    if result.returncode:
-        return source.name, result.stderr
+    completed = subprocess.run(cmd + [str(source), "-o", str(obj)],
+                               cwd=ROOT, capture_output=True, text=True)
+    if completed.returncode:
+        return source.name, completed.stderr
     return source.name, ""
 
 
@@ -46,8 +46,8 @@ def compile_newlib(source):
     cmd = BASE + ["-msoft-float", "-mno-sse", "-mno-mmx", "-Iport/include",
                   f"-I{source.parent}", "-include", "newlib_shim.h",
                   str(source), "-o", str(obj)]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    return source.name, result.stderr if result.returncode else ""
+    completed = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    return source.name, completed.stderr if completed.returncode else ""
 
 
 def compile_cpp(source):
@@ -57,16 +57,16 @@ def compile_cpp(source):
            "/D_CRT_SECURE_NO_WARNINGS", f"/I{SDL}",
            f"/I{ROOT / 'port/third_party/imgui'}", f"/I{ROOT / 'port/src/gs'}",
            f"/I{GEN}", f"/Fo{obj}", str(source)]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    return source.name, result.stderr if result.returncode else ""
+    completed = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    return source.name, completed.stderr if completed.returncode else ""
 
 
 def compile_data(source):
     obj = DATA_OUT / (source.stem + ".obj")
-    result = subprocess.run(["clang", "--target=x86_64-pc-windows-msvc", "-c",
-                             "-x", "assembler", str(source), "-o", str(obj)],
-                            cwd=ROOT, capture_output=True, text=True)
-    return source.name, result.stderr if result.returncode else ""
+    completed = subprocess.run(["clang", "--target=x86_64-pc-windows-msvc", "-c",
+                                "-x", "assembler", str(source), "-o", str(obj)],
+                               cwd=ROOT, capture_output=True, text=True)
+    return source.name, completed.stderr if completed.returncode else ""
 
 
 def main():

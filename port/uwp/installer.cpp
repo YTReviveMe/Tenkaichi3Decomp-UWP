@@ -398,7 +398,6 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
     SDL_ReleaseWindowFromGPUDevice(gpu, window);
     SDL_DestroyGPUDevice(gpu);
     SDL_DestroyWindow(window);
-    // Keep the WGI hint for gameplay.
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS);
     PortUwp_Trace(done ? "ISO installer completed" : "ISO installer closed");
     if (!done) PortUwp_SetStorageError("The game setup was closed before installation finished");

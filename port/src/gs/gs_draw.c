@@ -2111,7 +2111,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     PortVideo now;
     GsGpu_GetSettings(&now);
     if (v->scale != now.scale) {
-        gsPendingScale = v->scale < 1 ? 1 : v->scale > GS_MAX_SCALE ? GS_MAX_SCALE : v->scale; /* applied between two frames */
+        gsPendingScale = v->scale < 1 ? 1 : v->scale > GS_MAX_SCALE ? GS_MAX_SCALE : v->scale;
     }
     if (v->aspectMilli != now.aspectMilli) {
         Port_SetAspectMilli(v->aspectMilli);

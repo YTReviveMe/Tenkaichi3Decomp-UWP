@@ -45,7 +45,6 @@ int main(int argc, char **argv) {
     _snprintf_s(image_message, sizeof(image_message), _TRUNCATE,
                 "BT3 startup: image base 0x%llx", (unsigned long long)image_base);
     PortUwp_Trace(image_message);
-    // Set WGI before SDL_Init.
     if (SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_WGI, "1", SDL_HINT_OVERRIDE))
         PortUwp_Trace("BT3 startup: Windows Gaming Input enabled");
     else

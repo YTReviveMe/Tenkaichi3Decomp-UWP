@@ -51,7 +51,7 @@ extern "C" int PortUwp_HttpRequest(const char *url, const char *body,
         const auto length = contents.size() < capacity - 1 ? contents.size() : capacity - 1;
         std::memcpy(answer, contents.data(), length);
         answer[length] = '\0';
-        return 1; /* keep 403 JSON for the existing matchmaking error messages */
+        return 1;
     } catch (const winrt::hresult_error &) {
         return 0;
     } catch (...) {

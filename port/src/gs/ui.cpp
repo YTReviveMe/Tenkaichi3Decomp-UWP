@@ -2700,7 +2700,6 @@ static bool frame_build(void) {
     }
     // (the button that becomes the binding would also press the row it is bound in; while a chat line is typed the
     // controller is the game's)
-    // Keep keyboard controller presses out of ImGui navigation.
     bool screenKeyboard = false;
 #ifdef BT3_UWP
     screenKeyboard = sNet && sUiWindow != NULL && SDL_ScreenKeyboardShown(sUiWindow);

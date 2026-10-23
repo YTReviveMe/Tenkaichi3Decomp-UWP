@@ -28,7 +28,7 @@ def run(args):
 
 
 def compile_one(source):
-    import ptr32  # libclang is loaded in each worker only when needed
+    import ptr32
 
     prepared, _, missing = portsrc.prepare(source)
     stem = str(source.relative_to(ROOT)).replace("/", "_").replace("\\", "_")[:-2]
@@ -42,9 +42,9 @@ def compile_one(source):
         common += ["-Dmain=__real_main", "-DProgress_Main=__wrap_Progress_Main"]
     elif source == ROOT / "src/menu/menu_a_b.c":
         common.append("-DProgress_Main=__real_Progress_Main")
-    result = run(common + ["-E", str(prepared), "-o", str(preprocessed)])
-    if result.returncode:
-        return source.name, "preprocess", result.stderr
+    completed = run(common + ["-E", str(prepared), "-o", str(preprocessed)])
+    if completed.returncode:
+        return source.name, "preprocess", completed.stderr
     preprocessed.write_text(eeconst.transform(preprocessed.read_text(encoding="latin-1")), encoding="latin-1")
     try:
         rewritten = ptr32.transform(str(preprocessed), ["-x", "cpp-output",
@@ -54,16 +54,16 @@ def compile_one(source):
     except RuntimeError as error:
         return source.name, "ptr32", str(error)
     preprocessed.write_text(rewritten, encoding="latin-1")
-    result = run(BASE + ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes",
-                         "-x", "cpp-output", str(preprocessed), "-o", str(llvm_ir)])
-    if result.returncode:
-        return source.name, "LLVM IR", result.stderr
+    completed = run(BASE + ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes",
+                            "-x", "cpp-output", str(preprocessed), "-o", str(llvm_ir)])
+    if completed.returncode:
+        return source.name, "LLVM IR", completed.stderr
     fixed, _ = irfix.fix(llvm_ir.read_text(encoding="utf-8"))
     llvm_ir.write_text(fixed, encoding="utf-8")
-    result = run(["llc", "-O2", "-filetype=obj", f"-mtriple={TRIPLE}",
-                  "-relocation-model=static", str(llvm_ir), "-o", str(obj)])
-    if result.returncode:
-        return source.name, "codegen", result.stderr
+    completed = run(["llc", "-O2", "-filetype=obj", f"-mtriple={TRIPLE}",
+                     "-relocation-model=static", str(llvm_ir), "-o", str(obj)])
+    if completed.returncode:
+        return source.name, "codegen", completed.stderr
     return source.name, "ok", f"{len(missing)} source functions have no C body" if missing else ""
 
 

@@ -1278,7 +1278,7 @@ int Gs_OnRenderThread(void) {
 /* For the game's thread before it touches what the render thread uses while it runs a list (GS memory and registers,
    the back end): returns once the thread has nothing to do. Without the thread, at once. */
 void Gs_RenderIdle(void) {
-    if (sThreaded && !render_is_self()) { /* (on the render thread itself: it is the one running) */
+    if (sThreaded && !render_is_self()) {
         render_wait();
     }
 }

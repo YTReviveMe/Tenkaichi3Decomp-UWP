@@ -26,8 +26,7 @@ def main():
     if not names:
         raise SystemExit("No missing data-table symbols were found in the link log")
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    body = ["/* Generated UWP equivalents of port/tools/link.py trap stubs. */",
-            "#include <windows.h>", "#include <stdlib.h>",
+    body = ["#include <windows.h>", "#include <stdlib.h>",
             "static void missing(const char *symbol) {",
             "    OutputDebugStringA(\"bt3: unimplemented game library symbol: \" );",
             "    OutputDebugStringA(symbol);",
