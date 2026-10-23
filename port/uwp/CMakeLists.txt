@@ -93,38 +93,3 @@ if(BT3_GAME)
         COMMAND "${bt3_editbin}" /NOLOGO /LARGEADDRESSAWARE "$<TARGET_FILE:bt3_uwp_game>"
         COMMENT "Allow full x64 process address space while retaining low game image")
 endif()
-
-if(BT3_SDL3_UWP_SOURCE)
-    add_library(bt3_uwp_renderer_probe OBJECT ../src/gs/gs_gpu.c)
-    target_compile_definitions(bt3_uwp_renderer_probe PRIVATE BT3_UWP=1 _CRT_SECURE_NO_WARNINGS)
-    target_include_directories(bt3_uwp_renderer_probe PRIVATE
-        ${BT3_SDL3_UWP_SOURCE}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../build/gen/gs
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gs)
-endif()
-
-option(BT3_BOOTSTRAP "Build an Xbox platform check executable" OFF)
-if(BT3_BOOTSTRAP)
-    if(NOT BT3_SDL3_UWP_SOURCE OR NOT BT3_SDL3_UWP_BUILD)
-        message(FATAL_ERROR "The platform check needs the patched SDL source and build paths")
-    endif()
-    set(package_assets
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets/StoreLogo.png
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets/Square150x150Logo.png
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets/Square44x44Logo.png
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets/SplashScreen.png)
-    set(sdl_dll "${BT3_SDL3_UWP_BUILD}/Release/SDL3.dll")
-    set_source_files_properties(${package_assets} PROPERTIES
-        VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION assets)
-    set_source_files_properties("${sdl_dll}" PROPERTIES
-        VS_DEPLOYMENT_CONTENT 1 VS_DEPLOYMENT_LOCATION ".")
-    add_executable(bt3_uwp_bootstrap WIN32 bootstrap.cpp Package.appxmanifest ${package_assets} "${sdl_dll}")
-    set_target_properties(bt3_uwp_bootstrap PROPERTIES OUTPUT_NAME Tenkaichi3DecompUWP)
-    set_property(TARGET bt3_uwp_bootstrap PROPERTY VS_WINDOWS_TARGET_PLATFORM_MIN_VERSION "10.0.19041.0")
-    set_source_files_properties(bootstrap.cpp PROPERTIES COMPILE_OPTIONS /ZW)
-    target_include_directories(bt3_uwp_bootstrap PRIVATE ${BT3_SDL3_UWP_SOURCE}/include)
-    target_link_libraries(bt3_uwp_bootstrap PRIVATE bt3_uwp_storage WindowsApp
-        "${BT3_SDL3_UWP_BUILD}/Release/SDL3.lib")
-    target_link_options(bt3_uwp_bootstrap PRIVATE /APPCONTAINER /WINMD
-        "/WINMDFILE:${CMAKE_CURRENT_BINARY_DIR}/Tenkaichi3DecompUWP.winmd")
-endif()
