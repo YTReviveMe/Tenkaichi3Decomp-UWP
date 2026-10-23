@@ -14,7 +14,6 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 typedef INIT_ONCE pthread_once_t;
 typedef int pthread_attr_t;
 
-
 #define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
 #define PTHREAD_COND_INITIALIZER CONDITION_VARIABLE_INIT
 #define PTHREAD_ONCE_INIT INIT_ONCE_STATIC_INIT
