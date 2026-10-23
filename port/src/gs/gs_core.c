@@ -192,6 +192,7 @@ static uint32_t sMoved;
 
 void Gs_StateKeep(void) {
     extern void GsVu1_StateKeep(int restore); /* gs_vu1.c: the vertex unit's memory and programs */
+    Gs_RenderIdle(); /* (GS memory and registers are the render thread's while it runs a list) */
     if (sKept.vram == NULL) {
         sKept.vram = malloc(sizeof(sVram));
     }
@@ -205,6 +206,7 @@ void Gs_StateKeep(void) {
 void Gs_StateBack(void) {
     extern void GsVu1_StateKeep(int restore);
     int i;
+    Gs_RenderIdle();
     if (!sKept.valid) {
         return;
     }
@@ -1082,13 +1084,25 @@ static void screenshot(void) {
    touches the GS (uploads on the GIF channel, the per-frame clear) first waits until the thread is idle, which
    is the game's own sceGsSyncPath point. The window and all drawing belong to this thread. ---- */
 static pthread_t sThread;
+#ifdef BT3_UWP
+static DWORD sRenderThreadId;
+static int render_is_self(void) { return GetCurrentThreadId() == sRenderThreadId; }
+#else
+static int render_is_self(void) { return pthread_equal(pthread_self(), sThread); }
+#endif
 static pthread_mutex_t sLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t sWake = PTHREAD_COND_INITIALIZER, sDone = PTHREAD_COND_INITIALIZER;
 static int sThreaded;
 static int sJob;            /* 0 none, 1 start the GPU back end, 2 run a list */
 static uint32_t sJobTadr;
 static int sJobTte, sInitResult;
+static int sStopping; /* the program is ending: the render thread leaves its loop (render_stop) */
+static int sListDone; /* the list being run has been drawn and its first picture shown (Smooth motion's others may follow) */
 static void run_chain(uint32_t tadr, int tte);
+static void run_frozen(void);
+static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte));
+static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte);
+static size_t sFrozenUsed; /* (the copy of a frame's list for the render thread: freeze_block) */
 
 /* BT3_GS_RACE=1 (with the render thread): finds data of a frame's list that the game changes while the list is
    being drawn. The list's blocks are hashed when the game hands the list over and again when the drawing is
@@ -1149,11 +1163,36 @@ static void race_compare(void) {
 }
 
 static void *render_thread(void *arg) {
+    extern void PortInput_Pump(void); /* gs_input.c */
     (void)arg;
+#ifdef BT3_UWP
+    sRenderThreadId = GetCurrentThreadId();
+#endif
     pthread_mutex_lock(&sLock);
     for (;;) {
-        while (sJob == 0) {
-            pthread_cond_wait(&sWake, &sLock);
+        while (sJob == 0 && !sStopping) {
+            /* waiting for the game's next list: the window's events every millisecond (the window is this thread's) */
+#ifdef BT3_UWP
+            int timed_out = !SleepConditionVariableSRW(&sWake, &sLock, 1, 0);
+#else
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME, &until);
+            until.tv_nsec += 1000000;
+            if (until.tv_nsec >= 1000000000) {
+                until.tv_nsec -= 1000000000;
+                until.tv_sec++;
+            }
+            int timed_out = pthread_cond_timedwait(&sWake, &sLock, &until) != 0;
+#endif
+            if (timed_out && sJob == 0 && !sStopping && sGpu) {
+                pthread_mutex_unlock(&sLock);
+                PortInput_Pump();
+                pthread_mutex_lock(&sLock);
+            }
+        }
+        if (sStopping && sJob == 0) {
+            pthread_mutex_unlock(&sLock);
+            return NULL;
         }
         if (sJob == 1) {
             sInitResult = GsGpu_Init();
@@ -1161,7 +1200,21 @@ static void *render_thread(void *arg) {
             uint32_t tadr = sJobTadr;
             int tte = sJobTte;
             pthread_mutex_unlock(&sLock);
-            run_chain(tadr, tte);
+            {
+                extern void GsGpu_InterpHurry(int on);
+                GsGpu_InterpHurry(0);
+            }
+            run_frozen();
+            pthread_mutex_lock(&sLock);
+            sListDone = 1;
+            pthread_cond_broadcast(&sDone);
+            pthread_mutex_unlock(&sLock);
+            {
+                extern void GsGpu_InterpRun(void); /* gs_draw.c: Smooth motion's pictures after the first, each when due */
+                if (sGpu) {
+                    GsGpu_InterpRun();
+                }
+            }
             if (getenv("BT3_GS_RACE") != NULL) {
                 race_walk(tadr, 1);
                 race_compare();
@@ -1183,9 +1236,57 @@ static void render_wait(void) {
     pthread_mutex_unlock(&sLock);
 }
 
+/* At the program's end (atexit), from the game's thread: the list being drawn is finished, then the thread leaves
+   its loop and is waited for, so that nothing it uses (the window, the device) is taken down under it. From the
+   render thread itself (Esc in the window, the settings window's Quit) there is nothing to wait for. */
+static void render_stop(void) {
+    if (!sThreaded || render_is_self()) {
+        return;
+    }
+    render_wait();
+    pthread_mutex_lock(&sLock);
+    sStopping = 1;
+    pthread_cond_broadcast(&sWake);
+    pthread_mutex_unlock(&sLock);
+    pthread_join(sThread, NULL);
+}
+
+/* For the pad read (plat_stub.c), when the game has time to spare: returns once the list handed over last has been
+   drawn and its first picture shown. Without the thread that drawing comes before the pads are read, at the start of
+   the next tick; with it the game read the pads at once and the drawing went on beside it, which made what was read
+   older by the drawing's time when its picture came (2.4 ms measured at 2x). A game that is behind does not wait
+   here: then the drawing beside the game's work is what the thread is for. */
+void Gs_RenderListWait(void) {
+    if (!sThreaded || render_is_self()) {
+        return;
+    }
+    pthread_mutex_lock(&sLock);
+    while (sJob == 2 && !sListDone) {
+        pthread_cond_wait(&sDone, &sLock);
+    }
+    pthread_mutex_unlock(&sLock);
+}
+
+int Gs_RenderThreaded(void) {
+    return sThreaded;
+}
+
+int Gs_OnRenderThread(void) {
+    return sThreaded && render_is_self();
+}
+
+/* For the game's thread before it touches what the render thread uses while it runs a list (GS memory and registers,
+   the back end): returns once the thread has nothing to do. Without the thread, at once. */
+void Gs_RenderIdle(void) {
+    if (sThreaded && !render_is_self()) { /* (on the render thread itself: it is the one running) */
+        render_wait();
+    }
+}
+
 static void render_post(int job, uint32_t tadr, int tte) {
     pthread_mutex_lock(&sLock);
     sJob = job;
+    sListDone = 0;
     sJobTadr = tadr;
     sJobTte = tte;
     pthread_cond_signal(&sWake);
@@ -1240,6 +1341,20 @@ static const char *gs_mode(void) {
     return strcmp(m, "none") == 0 || strcmp(m, "off") == 0 || strcmp(m, "0") == 0 ? NULL : m;
 }
 
+static int render_thread_wanted(void) {
+    extern int Port_Setting(const char *name, int def);
+    extern int SDL_GetNumLogicalCPUCores(void);
+    const char *e = getenv("BT3_GS_THREAD");
+    int want = e != NULL ? atoi(e) != 0 : Port_Setting("render_thread", 0) != 0;
+#ifdef __APPLE__
+    want = 0;
+#endif
+    if (want && e == NULL && (Port_Setting("gpu_api", 0) == 1 || SDL_GetNumLogicalCPUCores() <= 2)) {
+        want = 0;
+    }
+    return want;
+}
+
 static int gs_on(void) {
     static int on = -1;
 
@@ -1253,14 +1368,20 @@ static int gs_on(void) {
             sscanf(getenv("BT3_GS_PROBE"), "%d,%d", &sProbeX, &sProbeY);
         }
         if (on && strcmp(gs_mode(), "gpu") == 0) {
-            /* BT3_GS_THREAD=1: the back end and the list run on the render thread (experimental: the game was seen
-               to change data a list still refers to, which shows as a jumping camera). Default: this thread. */
-            sThreaded = getenv("BT3_GS_THREAD") != NULL;
+            /* The render thread (setting "render_thread", F1 > Video; BT3_GS_THREAD=0/1 over it): the back end, the
+               window and the list run on a thread of their own while the game computes the next tick. Not with
+               OpenGL (its context is one thread's, and the game's thread asks the back end for a few things), not
+               on macOS (a window there is the main thread's), not with two logical processors or fewer. */
+            sThreaded = render_thread_wanted();
             if (sThreaded) {
                 pthread_create(&sThread, NULL, render_thread, NULL);
                 render_post(1, 0, 0);
                 render_wait();
                 sGpu = sInitResult;
+                atexit(render_stop);
+                if (sGpu && GsGpu_BackendIsGl()) {
+                    fprintf(stderr, "bt3: render thread: the Vulkan renderer did not start; OpenGL on the thread (the game's own reads of the picture are left out)\n");
+                }
             } else {
                 sGpu = GsGpu_Init();
             }
@@ -1320,6 +1441,8 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     }
     tChain = now_ns();
     if (sThreaded) {
+        extern void GsGpu_InterpHurry(int on); /* gs_draw.c: the next list is here: the tick's real picture at once */
+        GsGpu_InterpHurry(1);
         render_wait(); /* the previous list must be finished before this one starts (the PS2's sceGsSyncPath) */
 #ifdef BT3_UWP
         renderWait = now_ns() - tChain;
@@ -1438,12 +1561,64 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
         if (getenv("BT3_GS_RACE") != NULL) {
             race_walk(tadr, 0);
         }
+        sFrozenUsed = 0;
+        walk_chain(tadr, tte, freeze_block);
         render_post(2, tadr, tte);
     }
 }
 
-/* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
-static void run_chain(uint32_t tadr, int tte) {
+/* One block of a frame's list into VIF1: its tag's last two words (with TTE) and its data. */
+static void chain_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte) {
+    sStat[0]++;
+    if (tte) {
+        vif(tag + 2, 2);
+    }
+    vif(data, qwc * 4);
+}
+
+static void chain_end(void);
+
+/* With the render thread: the frame's list as it was when the game handed it over. The game goes on with the next
+   frame meanwhile and writes over data the list refers to (BT3_GS_RACE found the block of the view the fighters
+   are drawn with: a jumping camera), so every block the list takes, its tag included, is copied on the game's
+   thread at the hand-over, and the render thread works from the copy: what it sees is what the list was at that
+   moment, as without the thread. Each block in sFrozen: qwc, tte, the tag's four words, then the data. */
+static uint32_t *sFrozen;
+static size_t sFrozenSize;
+
+static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte) {
+    size_t need = 6 + (size_t)qwc * 4;
+    uint32_t *o;
+
+    if (sFrozenUsed + need > sFrozenSize) {
+        size_t size = sFrozenSize ? sFrozenSize * 2 : (size_t)1 << 20;
+        while (size < sFrozenUsed + need) {
+            size *= 2;
+        }
+        sFrozen = realloc(sFrozen, size * sizeof(uint32_t));
+        sFrozenSize = size;
+    }
+    o = sFrozen + sFrozenUsed;
+    o[0] = qwc;
+    o[1] = (uint32_t)tte;
+    memcpy(o + 2, tag, 16);
+    memcpy(o + 6, data, (size_t)qwc * 16);
+    sFrozenUsed += need;
+}
+
+static void run_frozen(void) {
+    size_t at = 0;
+
+    while (at < sFrozenUsed) {
+        const uint32_t *b = sFrozen + at;
+        chain_block(b + 2, b + 6, b[0], (int)b[1]);
+        at += 6 + (size_t)b[0] * 4;
+    }
+    chain_end();
+}
+
+/* Walks one frame's list, the DMA chain at `tadr` on VIF1, handing each block to `block`. */
+static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte)) {
     uint32_t stack[2], sp = 0;
     int guard;
 
@@ -1465,15 +1640,20 @@ static void run_chain(uint32_t tadr, int tte) {
         if (sDumpFrame == (int)sFrame) {
             fprintf(stderr, "  dma tag at %08x: id %u qwc %u addr %08x | %08x %08x (depth %u)\n", (unsigned)Port_Addr(tag), id, qwc, addr, tag[2], tag[3], sp);
         }
-        sStat[0]++;
-        if (tte) {
-            vif(tag + 2, 2);
-        }
-        vif(data, qwc * 4);
+        block(tag, data, qwc, tte);
         if (end) {
             break;
         }
     }
+}
+
+/* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
+static void run_chain(uint32_t tadr, int tte) {
+    walk_chain(tadr, tte, chain_block);
+    chain_end();
+}
+
+static void chain_end(void) {
     if (getenv("BT3_GS_VERBOSE") != NULL && (sFrame < 4 || sFrame % 60 == 0)) {
         fprintf(stderr, "gs: frame %u: %u DMA tags, %u VIF codes, %u DIRECT qwords, %u GIF tags, %u register writes, %u vertices, "
                         "%u image qwords, %d targets\n", sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5],
@@ -1522,9 +1702,10 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
         fprintf(stderr, "gs: frame %u: the game reads %ux%u back from buffer %#x, row %u\n", sFrame, w, h, fbp, y0);
     }
     if (sGpu) {
-        if (sThreaded) {
-            return;
+        if (Gs_RenderThreaded() && GsGpu_BackendIsGl()) {
+            return; /* (OpenGL on the render thread: its context is that thread's; the game gets black, as before) */
         }
+        Gs_RenderIdle(); /* (the back end is the render thread's while it runs a list) */
         {
             /* First choice: the frame stays on the card as it was drawn and the cross-fade draws from that (the
                game is handed black, which it uploads and never shows). BT3_XFADE_READ=1: the game's own way. */

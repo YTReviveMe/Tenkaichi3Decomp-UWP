@@ -2,13 +2,13 @@
 
 `bt3_uwp_game` builds the decompiled game for x64 UWP. The package includes SDL3, DXIL shaders, menu assets, fonts, and the executable's data and state maps. Game files are supplied by the player.
 
-The upstream 0.1.38.1 test package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Upstream-0.1.38.1-0.0.39.0.zip`. Version 0.0.27.0 remains the stable fallback while testers check this update on Xbox. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
+The upstream 0.1.38.3 test package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Upstream-0.1.38.3-0.0.40.0.zip`. Version 0.0.27.0 remains the stable fallback while testers check this update on Xbox. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
 
 ## Game data
 
 On first launch, choose **Internal** or **External**, browse to an unmodified USA ISO (SLUS-21678), and select **Install and Play**. The installer verifies the disc and extracts it into `BT3`. Put an internal ISO in `D:\DevelopmentFiles\BT3`, or browse to one on a removable drive. The ISO can be removed after extraction.
 
-To add Spanish, German, French and Italian during setup, select **European ISO (optional)** and choose an ISO of the European release (SLES-54945) before installing. The USA disc is still required for the game. For an existing installation, open the in-game settings at **UI > Add European languages on next launch**, close the app, and reopen it to select the European ISO. The language archives are extracted beside the installed game data, whether it is internal or external. A language selector appears on the next start; the language can also be changed under **UI > Language**.
+To add Spanish, German, French and Italian during setup, select **European ISO (optional)** and choose an ISO of the European release (SLES-54945) before installing. The USA disc is still required for the game. The European disc now also supplies the opening soundtrack and language selector artwork. For an existing installation, open the in-game settings at **UI > Add European languages on next launch**, close the app, and reopen it to select the European ISO. Repeat this once if you added European languages on an earlier build. The European files are extracted beside the installed game data, whether it is internal or external. A language selector appears on the next start; the language can also be changed under **UI > Language**.
 
 Existing PC game data can also be copied from `gamedata` into `BT3`. The extracted files should include:
 
@@ -26,9 +26,9 @@ Internal data lives at `D:\DevelopmentFiles\BT3`. External data lives at the rem
 
 Put `.dds` or `.png` replacement textures in `D:\DevelopmentFiles\BT3\textures`. When this folder exists, the app uses it even if the game data is on an external drive. Otherwise it uses `<Drive>:\BT3\textures` with external content. Subfolders are supported. To switch back to external textures, rename or remove the internal `textures` folder. `boot.log` records the selected texture folder.
 
-Upstream 0.1.38.1 reads replacement files in the background and keeps recently read files in memory. An HD texture may appear a frame or two after its original. When a texture pack is present, `boot.log` records `Texture perf`, `Texture GPU`, and `Texture files` lines every 60 game frames. For a comparison, play the same fight at the same resolution with the pack on and off, then send the new `boot.log`. `port.log` has the same lines if it is easier to retrieve from the development folder.
+Upstream 0.1.38.3 reads replacement files in the background and keeps recently read files in memory. An HD texture may appear a frame or two after its original. When a texture pack is present, `boot.log` records `Texture perf`, `Texture GPU`, and `Texture files` lines every 60 game frames. For a comparison, play the same fight at the same resolution with the pack on and off, then send the new `boot.log`. `port.log` has the same lines if it is easier to retrieve from the development folder.
 
-Dragon Net Battle and Tenkaichi Budokai Online use the online lobby. Direct addresses, room codes, and quick match use the desktop port's network protocol. Test online play with both players on 0.1.38.1-based builds. Quick match depends on the configured matchmaking service and may reject unofficial builds. For a custom service, put its base URL in `D:\DevelopmentFiles\BT3\matchmaking-url.txt`. `BT3_MATCH_URL` takes priority when set in the app environment. Xbox to Xbox play was confirmed by a tester with a two-frame setting on an earlier build.
+Dragon Net Battle and Tenkaichi Budokai Online use the online lobby. Direct addresses, room codes, and quick match use the desktop port's network protocol. Upstream lists online compatibility from 0.1.38 through 0.1.38.3. Quick match depends on the configured matchmaking service and may reject unofficial builds. For a custom service, put its base URL in `D:\DevelopmentFiles\BT3\matchmaking-url.txt`. `BT3_MATCH_URL` takes priority when set in the app environment. Xbox to Xbox play was confirmed by a tester with a two-frame setting on an earlier build.
 
 ## Build
 

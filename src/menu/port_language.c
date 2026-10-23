@@ -5,6 +5,7 @@
 
 #ifdef PORT
 #include "../../port/src/gs/menu_translation.h"
+#include "../../port/src/gs/menu_labels.h"
 #include <string.h>
 
 extern int gPortOverlayOpen;
@@ -158,10 +159,8 @@ void PortLanguage_Run(void) {
         if (strcmp(sLanguage[i].locale, saved) == 0) { choice = i; break; }
     }
     {
-        char path[1200];
-        sLanguageArt[0] = MenuTranslation_ArtPath(TBO_LANG_BG, path, sizeof(path));
-        sLanguageArt[1] = MenuTranslation_ArtPath(TBO_LANG_ARROW_LEFT, path, sizeof(path));
-        sLanguageArt[2] = MenuTranslation_ArtPath(TBO_LANG_ARROW_RIGHT, path, sizeof(path));
+        s32 hasArt = MenuLabels_LanguageArtAvailable();
+        for (i = 0; i < 3; i++) sLanguageArt[i] = hasArt;
     }
     for (i = 0; i < count; i++) {
         PortLanguage_UppercaseName(sLanguageDisplay[i], sizeof(sLanguageDisplay[i]), sLanguage[i].name);

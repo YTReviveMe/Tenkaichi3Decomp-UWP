@@ -3,7 +3,6 @@
 #include "menu_text.h"
 #include "ui_text_extract.h"
 #include "ui_text_translate.h"
-#include "../../../include/menu/tbo_art.h"
 #ifndef _WIN32
 #include <dirent.h>
 #else
@@ -527,46 +526,10 @@ static int tr_bundled_dir(char *out, size_t size) {
 }
 static void tr_copy_all(const char *outDir, const char *labelsDir) {
     const char *src = NULL;
-    char source[1200], destination[1200], assetsDir[1200], oldAssetsDir[1200], catalogDir[1200], bundled[1100];
+    char catalogDir[1200], bundled[1100];
     int i;
     static const char *const extraCatalogs[] = {"ui", "port"};
     if (tr_bundled_dir(bundled, sizeof(bundled))) src = bundled;
-    {
-        static const char *const artwork[] = {
-            TBO_LANG_BG_FILE, TBO_LANG_ARROW_LEFT_FILE, TBO_LANG_ARROW_RIGHT_FILE
-        };
-        size_t k;
-        assetsDir[0] = 0;
-        oldAssetsDir[0] = 0;
-        if (snprintf(assetsDir, sizeof(assetsDir), "%s/assets", outDir) >= (int)sizeof(assetsDir)) assetsDir[0] = 0;
-        if (snprintf(oldAssetsDir, sizeof(oldAssetsDir), "%s/translations/assets", outDir) >= (int)sizeof(oldAssetsDir)) oldAssetsDir[0] = 0;
-        if (assetsDir[0] != 0) {
-#ifdef _WIN32
-            _mkdir(assetsDir);
-#else
-            mkdir(assetsDir, 0755);
-#endif
-            for (k = 0; k < sizeof(artwork) / sizeof(artwork[0]); k++) {
-                if (snprintf(destination, sizeof(destination), "%s/%s", assetsDir, artwork[k]) >= (int)sizeof(destination)) continue;
-                if (oldAssetsDir[0] != 0 && access(destination, 0) != 0 &&
-                    snprintf(source, sizeof(source), "%s/%s", oldAssetsDir, artwork[k]) < (int)sizeof(source)) {
-                    if (rename(source, destination) != 0) tr_copy_one(source, destination);
-                }
-                if (src == NULL) continue;
-                if (snprintf(source, sizeof(source), "%s/assets/%s", src, artwork[k]) >= (int)sizeof(source)) continue;
-                if (access(source, 0) != 0 &&
-                    snprintf(source, sizeof(source), "%s/%s", src, artwork[k]) >= (int)sizeof(source)) continue;
-                tr_copy_one(source, destination);
-            }
-            if (oldAssetsDir[0] != 0) {
-#ifdef _WIN32
-                _rmdir(oldAssetsDir);
-#else
-                rmdir(oldAssetsDir);
-#endif
-            }
-        }
-    }
     if (src == NULL) return;
     tr_copy_catalogs(src, "labels", labelsDir);
     for (i = 0; i < (int)(sizeof(extraCatalogs) / sizeof(extraCatalogs[0])); i++) {
@@ -816,23 +779,6 @@ int MenuTranslation_Available(MenuTranslationOption *out, int capacity) {
         folder = path;
     }
     return MenuTranslation_List(folder, out, capacity);
-}
-int MenuTranslation_ArtPath(int artId, char *out, size_t capacity) {
-    const char *data = getenv("BT3_DATA"), *folder = getenv("BT3_MENU_FONT"), *name;
-    char root[1200];
-    if (out == NULL || capacity == 0) return 0;
-    switch (artId) {
-        case TBO_LANG_BG: name = TBO_LANG_BG_FILE; break;
-        case TBO_LANG_ARROW_LEFT: name = TBO_LANG_ARROW_LEFT_FILE; break;
-        case TBO_LANG_ARROW_RIGHT: name = TBO_LANG_ARROW_RIGHT_FILE; break;
-        default: return 0;
-    }
-    if (folder == NULL || folder[0] == 0) {
-        if (snprintf(root, sizeof(root), "%s/game-text", data != NULL ? data : "gamedata") >= (int)sizeof(root)) return 0;
-        folder = root;
-    }
-    if (snprintf(out, capacity, "%s/assets/%s", folder, name) >= (int)capacity) return 0;
-    return access(out, 0) == 0;
 }
 int MenuTranslation_ShouldPrompt(const MenuTranslationOption *options, int count) {
     char saved[16];

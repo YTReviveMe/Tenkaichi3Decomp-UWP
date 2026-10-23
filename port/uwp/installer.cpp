@@ -278,7 +278,7 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         ImGui::Separator();
         ImGui::TextWrapped(add_languages ?
             "Select your European disc image. The installed USA game stays in place." :
-            "Select the USA game disc. A European disc can optionally add Spanish, German, French and Italian.");
+            "Select the USA game disc. A European disc can optionally add Spanish, German, French, Italian and the opening soundtrack.");
         ImGui::Spacing();
         ImGui::BeginDisabled(running);
         const float source_width = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
@@ -357,7 +357,7 @@ bool PortUwp_RunInstaller(const std::string &internal_root, std::string &install
         if (!selected_iso.empty()) ImGui::TextWrapped("USA: %s", selected_iso.c_str());
         if (!selected_eu.empty()) ImGui::TextWrapped("European: %s", selected_eu.c_str());
         ImGui::BeginDisabled((add_languages ? selected_eu.empty() : selected_iso.empty()) || running);
-        if (ImGui::Button(add_languages ? "ADD LANGUAGES AND PLAY" : "INSTALL AND PLAY", ImVec2(340, 56))) {
+        if (ImGui::Button(add_languages ? "ADD EUROPEAN CONTENT AND PLAY" : "INSTALL AND PLAY", ImVec2(340, 56))) {
             PortUwp_CreateDirectory(destination);
             Native_Start(with_slash(std::filesystem::path(destination).parent_path().string()),
                          selected_iso, selected_eu);

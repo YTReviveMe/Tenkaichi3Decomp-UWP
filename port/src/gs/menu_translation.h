@@ -25,8 +25,6 @@ int MenuTranslation_List(const char *outDir, MenuTranslationOption *out, int cap
 int MenuTranslation_Available(MenuTranslationOption *out, int capacity);
 int MenuTranslation_ShouldPrompt(const MenuTranslationOption *options, int count);
 int MenuTranslation_BootPending(void);
-/* Optional first-run language screen artwork. Returns its PNG path when present. */
-int MenuTranslation_ArtPath(int artId, char *out, size_t capacity);
 void MenuTranslation_SaveChoice(const char *locale);
 const char *MenuTranslation_Locale(void);
 const char *MenuTranslation_Text(const char *id);

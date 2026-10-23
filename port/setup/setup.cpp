@@ -34,7 +34,7 @@ struct Missing { std::string name, why, pkg; };
 static const char *kSourceSteps[] = {"Requirements", "Disc image", "Game data", "Executable data", "Build", "Self-test"};
 static const char *kReleaseSteps[] = {"Disc image", "Game data", "Self-test"};
 static const struct { const char *title, *help; } kHelp[] = {
-    {"European languages", "Spanish, German, French and Italian from the European disc"},
+    {"European languages", "Spanish, German, French and Italian, plus the opening soundtrack"},
     {"Requirements", "Compilers and tools on this computer"}, {"Disc image", "Your disc image is read and checked"},
     {"Game data", "Models, sounds and text are unpacked"}, {"Executable data", "The data tables of the game's programs"},
     {"Build", "The port is compiled (a few minutes)"}, {"Self-test", "The game's demo fight, without a window"}};
@@ -516,8 +516,8 @@ static void page_done() {
     if (sRelease && !Native_EuInstalled(sRoot)) { // the languages can be added at any time
         static const SDL_DialogFileFilter filters[] = {{"PS2 disc image", "iso;bin;img"}, {"All files", "*"}};
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
-        ImGui::TextWrapped("Spanish, German, French and Italian: add a disc image of the European release (SLES-54945).");
-        if (ImGui::Button("Add languages...")) {
+        ImGui::TextWrapped("Spanish, German, French and Italian, plus the opening soundtrack: add a European disc image (SLES-54945).");
+        if (ImGui::Button("Add languages and music...")) {
             SDL_ShowOpenFileDialog(dialog_done, (void *)1, sWindow, filters, 2, NULL, false);
         }
     }

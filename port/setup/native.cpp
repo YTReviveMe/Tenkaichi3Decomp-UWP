@@ -8,9 +8,9 @@
 //                config/DBZP.yaml and config/SLUS_216.78.yaml)
 //   game data    gamedata/disc/<loose files>, and every DATA/*.AFS archive split into gamedata/<name>/00000.bin ...
 //                (the layout of port/tools/extract_disc.py)
-//   European     optional, a second image (SLES-54945): the 60 entries of its DATA/PZS3EU1.AFS the game makes Spanish,
-//                German, French and Italian from, into gamedata/pzs3eu1/ (as port/tools/extract_eu.py); the game makes
-//                the catalogs and the menu art at its next start (ui_text_extract.c, menu_labels.c)
+//   European     optional, a second image (SLES-54945): 60 entries of DATA/PZS3EU1.AFS for translated menus/HUD,
+//                plus entry 1 of DATA/PZS3EU0.AFS for the native language selector and ZS3EUOP.ADX for the
+//                EU opening soundtrack (as port/tools/extract_eu.py).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -481,8 +481,9 @@ void step_eu(const std::string &root, const std::string &path) {
 #endif
     step("European languages");
     iso.open(path);
-    const IsoFile *sles = iso.find("SLES_549.45"), *afs = iso.find("DATA/PZS3EU1.AFS");
-    if (sles == NULL || afs == NULL) {
+    const IsoFile *sles = iso.find("SLES_549.45"), *afs = iso.find("DATA/PZS3EU1.AFS"), *selector = iso.find("DATA/PZS3EU0.AFS");
+    const IsoFile *openingAudio = iso.find("DATA/ZS3EUOP.ADX");
+    if (sles == NULL || afs == NULL || selector == NULL || openingAudio == NULL) {
         throw Stop{"This is not a disc image of the European release of Budokai Tenkaichi 3 (no SLES_549.45 on it).\n"
                    "The languages come from the European release (SLES-54945); the game itself is set up from the USA one."};
     }
@@ -521,7 +522,61 @@ void step_eu(const std::string &root, const std::string &path) {
         say(line);
         check_cancel();
     }
-    say("@ok Spanish, German, French and Italian: the game makes them at its next start");
+    iso.read(selector->offset, head, 8);
+    memcpy(&count, head + 4, 4);
+    if (memcmp(head, "AFS\0", 4) != 0 || count < 2 || selector->size < 24) {
+        throw Stop{"The language selector archive on the European disc image (DATA/PZS3EU0.AFS) is damaged."};
+    }
+    Uint32 selectorEntry[2];
+    iso.read(selector->offset + 16, selectorEntry, sizeof(selectorEntry));
+    if (selectorEntry[1] == 0 || selectorEntry[1] > (1u << 20) ||
+        (Uint64)selectorEntry[0] + selectorEntry[1] > selector->size) {
+        throw Stop{"The language selector archive on the European disc image (DATA/PZS3EU0.AFS) is damaged."};
+    }
+    std::string selectorDir = root +
+#ifdef BT3_UWP
+        "BT3/pzs3eu0/";
+    if (!PortUwp_CreateDirectory(selectorDir)) throw Stop{"Could not create the European language selector folder."};
+#else
+        "gamedata/pzs3eu0/";
+    SDL_CreateDirectory(selectorDir.c_str());
+#endif
+    copy_out(iso, selector->offset + selectorEntry[0], selectorEntry[1], selectorDir + "00001.part", buf);
+#ifdef BT3_UWP
+    if (!PortUwp_MoveFile(selectorDir + "00001.part", selectorDir + "00001.bin")) {
+#else
+    if (!SDL_RenamePath((selectorDir + "00001.part").c_str(), (selectorDir + "00001.bin").c_str())) {
+#endif
+        throw Stop{"Could not write " + selectorDir + "00001.bin."};
+    }
+    std::string movieDir = root +
+#ifdef BT3_UWP
+        "BT3/disc/DATA/";
+    if (!PortUwp_CreateDirectory(root + "BT3/disc/") || !PortUwp_CreateDirectory(movieDir))
+        throw Stop{"Could not create the European opening soundtrack folder."};
+#else
+        "gamedata/disc/DATA/";
+    SDL_CreateDirectory((root + "gamedata/disc/").c_str());
+    SDL_CreateDirectory(movieDir.c_str());
+#endif
+    Uint8 magic[2];
+    if (openingAudio->size < 2 || openingAudio->size > (16u << 20)) {
+        throw Stop{"The European opening soundtrack has an invalid size."};
+    }
+    iso.read(openingAudio->offset, magic, sizeof(magic));
+    if (magic[0] != 0x80 || magic[1] != 0) {
+        throw Stop{"The European opening soundtrack has an invalid header."};
+    }
+    std::string dest = movieDir + "ZS3EUOP.ADX";
+    copy_out(iso, openingAudio->offset, openingAudio->size, dest + ".part", buf);
+#ifdef BT3_UWP
+    if (!PortUwp_MoveFile(dest + ".part", dest)) {
+#else
+    if (!SDL_RenamePath((dest + ".part").c_str(), dest.c_str())) {
+#endif
+        throw Stop{"Could not write " + dest + "."};
+    }
+    say("@ok European languages and opening soundtrack: the game makes the languages at its next start");
 }
 
 void work(std::string root, std::string path, std::string eu) {
@@ -602,8 +657,13 @@ bool Native_Installed(const std::string &root) {
 }
 
 bool Native_EuInstalled(const std::string &root) {
-#ifndef BT3_UWP
+#ifdef BT3_UWP
+    if (!PortUwp_FileExists(root + "BT3/pzs3eu0/00001.bin")) return false;
+    if (!PortUwp_FileExists(root + "BT3/disc/DATA/ZS3EUOP.ADX")) return false;
+#else
     SDL_PathInfo info;
+    if (!SDL_GetPathInfo((root + "gamedata/pzs3eu0/00001.bin").c_str(), &info)) return false;
+    if (!SDL_GetPathInfo((root + "gamedata/disc/DATA/ZS3EUOP.ADX").c_str(), &info)) return false;
 #endif
     for (Uint32 e : eu_entries()) {
         char name[48];

@@ -39,6 +39,7 @@
 #ifdef BT3_UWP
 #include "../../uwp/include/uwp_fileops.h"
 #endif
+#include "../../../include/menu/tbo_art.h"
 
 /* namefont.c again, as this file's own: the functions the game calls get other names, the variables are static. */
 #define Port_NameFontSheets MenuLabels_NameSheets_
@@ -2185,6 +2186,66 @@ static uint8_t *ml_member(MlBuf packed, int raw, size_t *n) {
     }
     *n = full;
     return out;
+}
+
+/* The startup selector is in EU0, not the EU1 archives used for translated menu lettering. The three
+   decoded hashes identify the exact original pictures and reject a different or damaged archive. */
+static const struct { int id, index, w, h; uint64_t hash; } kMlLanguageArt[] = {
+    {TBO_LANG_BG,          1, 256, 512, UINT64_C(0xab29f0394b8dccee)},
+    {TBO_LANG_ARROW_LEFT,  6,  32,  32, UINT64_C(0xb46a6e3e734cdff9)},
+    {TBO_LANG_ARROW_RIGHT, 5,  32,  32, UINT64_C(0x9c1b444555c4b833)}
+};
+
+static int ml_language_path(char *path, size_t capacity) {
+    const char *data = getenv("BT3_DATA");
+    int n = snprintf(path, capacity, "%s/pzs3eu0/00001.bin", data != NULL && *data != 0 ? data : "gamedata");
+    return n >= 0 && (size_t)n < capacity;
+}
+
+int MenuLabels_LanguageArtAvailable(void) {
+    char path[1200];
+    return ml_language_path(path, sizeof(path)) && access(path, 0) == 0;
+}
+
+int MenuLabels_LanguageArtPixels(int id, unsigned char **pixels, int *w, int *h) {
+    MlCtx *c = NULL;
+    MlTex tex = {0};
+    MlBuf packed, member, part;
+    uint8_t *file = NULL, *unpacked = NULL, *copy = NULL;
+    const int art = id - TBO_LANG_BG;
+    char path[1200];
+    FILE *fp = NULL;
+    long size;
+    size_t n = 0;
+    int ok = 0;
+    if (pixels == NULL || w == NULL || h == NULL || art < 0 || art >= 3 ||
+        !ml_language_path(path, sizeof(path))) return 0;
+    *pixels = NULL;
+    fp = fopen(path, "rb");
+    if (fp == NULL || fseek(fp, 0, SEEK_END) != 0 || (size = ftell(fp)) <= 0 || size > 1024 * 1024 ||
+        fseek(fp, 0, SEEK_SET) != 0 || (file = malloc((size_t)size)) == NULL ||
+        fread(file, 1, (size_t)size, fp) != (size_t)size) goto done;
+    packed.p = file; packed.n = (size_t)size;
+    unpacked = ml_member(packed, 0, &n);
+    if (unpacked == NULL) goto done;
+    member.p = unpacked; member.n = n;
+    if (ml_table_count(member) < 1) goto done;
+    part = ml_part(member, 1);
+    if (part.n == 0 || (c = calloc(1, sizeof(*c))) == NULL ||
+        ml_texture(c, part, (uint32_t)kMlLanguageArt[art].index, &tex) <= 0 ||
+        tex.w != kMlLanguageArt[art].w || tex.h != kMlLanguageArt[art].h ||
+        tex.hash != kMlLanguageArt[art].hash ||
+        (copy = malloc((size_t)tex.w * tex.h * 4)) == NULL) goto done;
+    memcpy(copy, tex.rgba, (size_t)tex.w * tex.h * 4);
+    *pixels = copy;
+    *w = tex.w; *h = tex.h;
+    ok = 1;
+done:
+    if (fp != NULL) fclose(fp);
+    if (c != NULL) { ml_free(c); free(c); }
+    free(unpacked);
+    free(file);
+    return ok;
 }
 
 /* The two discs' sections side by side (path: the member, then the section numbers below it): every texture file

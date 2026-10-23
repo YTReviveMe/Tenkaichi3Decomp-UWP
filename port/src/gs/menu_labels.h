@@ -41,6 +41,12 @@ int MenuLabels_Art(const char *dataDir, int bank, char *why, size_t whyLen);
 int MenuLabels_ArtSwap(unsigned char *rgba, int w, int h);
 unsigned MenuLabels_ArtKey(void);
 
+/* Native startup language selector pictures from the player's European disc (PZS3EU0.AFS, entry 1).
+   `id` is TBO_LANG_BG/ARROW_LEFT/ARROW_RIGHT. On success `pixels` is malloc-owned RGBA in GS alpha
+   (0x80 is opaque); the caller frees it. No PNG assets are involved. */
+int MenuLabels_LanguageArtAvailable(void);
+int MenuLabels_LanguageArtPixels(int id, unsigned char **pixels, int *w, int *h);
+
 #ifdef __cplusplus
 }
 #endif

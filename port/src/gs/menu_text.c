@@ -1812,12 +1812,27 @@ uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed
 }
 
 static uint8_t *menu_text_render_name(const char *text, int kind, int scale, int *outWidth, int *outHeight) {
+    static Face addedNameFont;
+    static int addedNameChoice;
+    Face *font = &sFont;
     MenuLabel label;
     Row row;
     uint8_t *result;
     size_t bytes, i, length;
-    if (sFontChoice == 0 || sCount == 0 || text == NULL || kind < 0 || kind > 2 || scale < 1 || scale > 4 ||
+    if (sCount == 0 || text == NULL || kind < 0 || kind > 2 || scale < 1 || scale > 4 ||
         outWidth == NULL || outHeight == NULL) { return NULL; }
+    if (sFontChoice == 0) {
+        int choice;
+        for (choice = 1; choice <= sFontCount; choice++) {
+            if (!font_available(choice, MENU_TEXT_MENU)) continue;
+            if (addedNameChoice == choice) break;
+            face_close(&addedNameFont);
+            addedNameChoice = 0;
+            if (font_open(&addedNameFont, choice)) { addedNameChoice = choice; break; }
+        }
+        if (choice > sFontCount) return NULL;
+        font = &addedNameFont;
+    }
     length = strlen(text);
     if (length == 0 || length >= sizeof(label.text)) { return NULL; }
     label = sNameStyles[kind];
@@ -1825,7 +1840,7 @@ static uint8_t *menu_text_render_name(const char *text, int kind, int scale, int
     bytes = (size_t)512 * label.rowHeight * scale * scale * 4;
     result = malloc(bytes);
     if (result == NULL) { return NULL; }
-    if (!menu_text_row(&sFont, &label, scale, &row)) { free(result); return NULL; }
+    if (!menu_text_row(font, &label, scale, &row)) { free(result); return NULL; }
     row_paste(result, 512 * scale, 0, 0, 512 * scale, label.rowHeight * scale, &row);
     free(row.px);
     /* Menu texture pixels use PS2 alpha; the ImGui overlay uses conventional RGBA. */
