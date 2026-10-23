@@ -298,7 +298,7 @@ typedef struct MlGroup { /* the labels of one texture (or, for the name strips, 
 
 typedef struct MlRow { /* one label: a row of labels.tsv, an entry of labels.json */
     char id[64], textFrom[64];
-    uint64_t hash;
+    uint64_t hash, quick; /* (quick: MenuLabels_Quick) */
     int isRect, texW, texH, x, y, w;
     const char *text;
     int height, cap, baseline, center, margin, art, widthMilli;
@@ -1301,6 +1301,7 @@ static int ml_rows(MlCtx *c) {
                 snprintf(r->id, sizeof(r->id), "%s/0/%d", g->id, n);
                 r->isRect = 1;
                 r->hash = tex->hash;
+                r->quick = MenuLabels_Quick(tex->rgba, tex->w, tex->h);
                 r->texW = g->width;
                 r->texH = tex->h;
                 r->x = rc->x;
@@ -1369,6 +1370,7 @@ static int ml_rows(MlCtx *c) {
                 }
                 snprintf(r->id, sizeof(r->id), "%s/%d/%d", g->id, t, y / g->height);
                 r->hash = tex->hash;
+                r->quick = MenuLabels_Quick(tex->rgba, tex->w, tex->h);
                 r->texW = g->width;
                 r->texH = tex->h;
                 r->y = y;
@@ -1538,7 +1540,7 @@ static int ml_tsv(MlCtx *c, MlText *labels, MlText *styles, int *count) {
     int i;
 
     ml_put(labels, "# " MENU_LABELS_VERSION " hash width height y row_height cap_height baseline center margin width_milli x row_width art_width top bottom "
-                   "middle_rgb has_middle outline italic outline_milli outer_milli outer_rgb shadow outline_bottom bevel_milli bevel_light bevel_dark depth_milli mid_gradient font_face label_id\n");
+                   "middle_rgb has_middle outline italic outline_milli outer_milli outer_rgb shadow outline_bottom bevel_milli bevel_light bevel_dark depth_milli mid_gradient font_face label_id quick\n");
     /* the names of added songs and stages are drawn like the disc's (ui.cpp) */
     ml_put(styles, "# kind (0 song, 1 selected song, 2 stage) cap_height baseline margin width_milli top bottom outline\n");
     for (i = 0; i < 3; i++) {
@@ -1561,7 +1563,7 @@ static int ml_tsv(MlCtx *c, MlText *labels, MlText *styles, int *count) {
             return ml_fail(c, "%s: the label was measured outside its texture", r->id);
         }
         if (original == NULL || original[0] == '\0') return ml_fail(c, "%s: original label is missing", r->id);
-        ml_put(labels, "%016llx\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%s\t%d\t%d\t%d\t%s\t%d\t%s\t%d\t%s\t%s\t%d\t%d\t%d\t%s\n", (unsigned long long)r->hash,
+        ml_put(labels, "%016llx\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%s\t%d\t%d\t%d\t%s\t%d\t%s\t%d\t%s\t%s\t%d\t%d\t%d\t%s\t%016llx\n", (unsigned long long)r->hash,
                r->texW, r->texH, r->y, r->height, r->cap, r->baseline, r->center, r->margin,
                r->widthMilli ? r->widthMilli : 1000, r->x, r->w, r->art,
                ml_hex(col->top, top), ml_hex(col->bottom, bottom), ml_hex(col->middle, middle), col->hasMiddle,
@@ -1572,7 +1574,8 @@ static int ml_tsv(MlCtx *c, MlText *labels, MlText *styles, int *count) {
                ml_hex(r->colors == ML_MAIN_HEADING ? kHeadingBevelLight : col->top, bevelLight),
                ml_hex(r->colors == ML_MAIN_HEADING ? kHeadingBevelDark : col->depth ? col->outerColor : col->outline, bevelDark),
                (int)(col->depth * 1000.0f + 0.5f), col->midGradient, ml_starts(r->id, "notice-") || ml_starts(r->id, "combo-") ||
-               ml_starts(r->id, "timer-") || ml_starts(r->id, "win-counter/") || ml_starts(r->id, "blast-stock-counter/"), r->id);
+               ml_starts(r->id, "timer-") || ml_starts(r->id, "win-counter/") || ml_starts(r->id, "blast-stock-counter/"), r->id,
+               (unsigned long long)r->quick);
         ++*count;
     }
     if (*count > ML_ROWS) {

@@ -358,6 +358,16 @@ static s32 sTbBgFrames; /* how long it had been searching when the sparring figh
 s32 gPortTboSpar;       /* the battle that runs is Train While Waiting's sparring fight (its sign, its pause menu) */
 static char sTbBgCode[CODE_LEN + 1];
 static f32 Tb_Beat(s32 period);
+/* A format with a number in it ("%d FRAME") in the chosen language, for sprintf (the translation file's line keeps
+   its %d slots, or it is not used: port/src/gs/menu_translation.c). */
+static char *Tb_Fmt(char *format) {
+    static char buf[4][160];
+    static s32 k;
+    extern int Port_TrLine(const char *original, char *out, int size);
+
+    k = (k + 1) & 3;
+    return Port_TrLine(format, buf[k], 160) ? buf[k] : format;
+}
 
 static char *sTbHubName[HUB_COUNT] = {"Quick Match", "Ranked Match", "Create Room", "Join Room", "Friends", "Tournament", "Replays", "Leaderboard", "Profile"};
 static const s32 sTbHubReady[HUB_COUNT] = {1, 0, 1, 1, 0, 0, 0, 0, 1};
@@ -450,10 +460,7 @@ static void Tb_DelayText(char *out, s32 delay) {
     if (delay < 0) {
         sprintf(out, "AUTOMATIC");
     } else {
-        sprintf(out, "%d FRAME", (int)delay);
-        if (delay != 1) {
-            Ps_Cat(out, "S", 32);
-        }
+        sprintf(out, delay == 1 ? Tb_Fmt("%d FRAME") : Tb_Fmt("%d FRAMES"), (int)delay); /* (two lines to translate: not every language adds an S) */
     }
 }
 
@@ -463,7 +470,7 @@ static void Tb_RollText(char *out, s32 roll) {
     } else if (roll <= 0) {
         sprintf(out, "OFF");
     } else {
-        sprintf(out, "UP TO %d FRAMES", (int)roll);
+        sprintf(out, Tb_Fmt("UP TO %d FRAMES"), (int)roll);
     }
 }
 
@@ -1346,7 +1353,7 @@ static void Tb_DrawWaitText(void) {
         Ps_Text(22.0f, 172.0f, "THE SERVICE PAIRS YOU", 0.46f, 150.0f, 0);
         Ps_Text(22.0f, 190.0f, "WITH THE NEXT RIVAL", 0.46f, 150.0f, 0);
         if (n > 0) {
-            sprintf(line, "%d IN THIS QUEUE", (int)n);
+            sprintf(line, Tb_Fmt("%d IN THIS QUEUE"), (int)n);
             Ps_Text(22.0f, 214.0f, line, 0.42f, 150.0f, 5);
         }
     } else if (sTb->host) {
@@ -1375,7 +1382,7 @@ static void Tb_DrawWaitText(void) {
     if (sTb->found) {
         Ps_Text(262.0f, 302.0f, "YOUR RIVAL IS HERE!", 0.56f, 164.0f, 5);
     } else {
-        sprintf(line, "SEARCHING...  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+        sprintf(line, Tb_Fmt("SEARCHING...  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
         Ps_Text(262.0f, 302.0f, line, 0.52f, 164.0f, 0);
     }
     Ps_Align(0);
@@ -1452,7 +1459,7 @@ static void Tb_DrawSparText(void) {
     Ps_Text(266.0f, 151.0f, Tb_Fighter(sTb->spFoe), 0.54f, 170.0f, 3);
     Ps_Align(0);
     Ps_Text(28.0f, 240.0f, sTb->host == 2 ? "QUICK MATCH SEARCH" : sTb->host ? "YOUR ROOM IS OPEN" : "JOINING A ROOM", 0.5f, 260.0f, 2);
-    sprintf(line, "SEARCHING  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+    sprintf(line, Tb_Fmt("SEARCHING  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
     Ps_Text(28.0f, 264.0f, line, 0.52f, 260.0f, 5);
     Ps_Text(28.0f, 292.0f, "THE MATCH STARTS THE MOMENT", 0.42f, 260.0f, 0);
     Ps_Text(28.0f, 308.0f, "YOUR RIVAL ARRIVES", 0.42f, 260.0f, 0);
@@ -1482,13 +1489,13 @@ static void Tb_DrawQuickText(void) {
         if (n < 0) {
             sprintf(line, "...");
         } else {
-            sprintf(line, "%d WAITING", (int)n);
+            sprintf(line, Tb_Fmt("%d WAITING"), (int)n);
         }
         Ps_Align(2);
         Ps_Text(286.0f, 236.0f + 26.0f * (f32)q, line, 0.5f, 120.0f, n > 0 ? 5 : 3);
         Ps_Align(0);
     }
-    sprintf(line, "NO TIME LIMIT - %d%% SPEED", (int)Port_NetSpeedStandard());
+    sprintf(line, Tb_Fmt("NO TIME LIMIT - %d%% SPEED"), (int)Port_NetSpeedStandard());
     Ps_Text(28.0f, 296.0f, line, 0.46f, 260.0f, 3);
 }
 
@@ -1746,6 +1753,14 @@ static u16 *Tb_BoxLine(void) {
     if (say == NULL || say[0] == 0) {
         return NULL;
     }
+    {   /* in the chosen language (its file's line for this one), as the rest of the menu */
+        static char tr[512];
+        extern int Port_TrLine(const char *original, char *out, int size);
+
+        if (Port_TrLine(say, tr, sizeof(tr))) {
+            say = tr;
+        }
+    }
     for (k = 0; cur >= 0 && say[k] == said[k] && say[k] != 0; k++) {
     }
     if (cur >= 0 && say[k] == said[k]) {
@@ -1773,8 +1788,17 @@ static u16 *Tb_BoxLine(void) {
         if (n > start) {
             out[n++] = ' ';
         }
-        for (k = at; k < end && n < TB_BOX_LINE - 1; k++) {
-            out[n++] = (u8)say[k];
+        for (k = at; k < end && n < TB_BOX_LINE - 1; k++) { /* (UTF-8 to the box's 16-bit letters: a translation's accents) */
+            u32 c = (u8)say[k];
+
+            if (c >= 0xC0 && c < 0xE0 && k + 1 < end) {
+                c = ((c & 0x1F) << 6) | ((u8)say[k + 1] & 0x3F);
+                k += 1;
+            } else if (c >= 0xE0 && c < 0xF0 && k + 2 < end) {
+                c = ((c & 0x0F) << 12) | (((u8)say[k + 1] & 0x3F) << 6) | ((u8)say[k + 2] & 0x3F);
+                k += 2;
+            }
+            out[n++] = (u16)c;
         }
         out[n] = 0;
         if (mark > start && lines < 3 && Font_GetWidth(out + start) > room) { /* the word goes to the next line */
@@ -2047,7 +2071,7 @@ void PortTbo_SparSign(void) {
     secs = (sTbBgFrames + sTbSignFrames) / 60;
     Ps_PageSet();
     Ps_Panel(TBO_KIT_DIALOG, 128.0f, 66.0f, 384.0f, 124.0f, 0x70); /* (as much room under the lines as over them) */
-    sprintf(line, "Searching for a rival...  %d:%02d", (int)(secs / 60), (int)(secs % 60));
+    sprintf(line, Tb_Fmt("Searching for a rival...  %d:%02d"), (int)(secs / 60), (int)(secs % 60));
     Ps_Msg(146.0f, 72.0f, line, 1.0f, 0x80);
     if (sTbBgKind == 2) {
         Ps_Copy(line, "Quick Match: ", 64);

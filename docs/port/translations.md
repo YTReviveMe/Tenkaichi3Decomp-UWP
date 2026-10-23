@@ -94,6 +94,25 @@ missing or invalid catalog. The returned text is UTF-8; ImGui can display it
 directly. Native game dialogs need conversion to UTF-16 and a buffer large
 enough for translated text, as in `port/src/quit_dialog.c`.
 
+**The online menus (Tenkaichi Budokai Online):** their lines are entries of
+`port/<locale>.json` too, with ids `tbo/<8 hex digits>`, looked up by their
+English `original` where the menu draws or measures a line
+(`port/src/gs/tbo_text.c`), where it joins pieces (`Ps_Copy`/`Ps_Cat`, which
+also feed the screen reader) and where it formats a number (`Tb_Fmt` around a
+`sprintf` format). The talk box at the foot of the screen takes UTF-8. To make
+or bring up to date a file for translators:
+
+    python3 port/tools/tbo_strings.py es --name "Español" --out es.json      # --bt4: without BT3's fighter names
+
+A new line's `text` is its English, as a placeholder (a line left so is shown in
+English); running the tool again on the same file keeps what is translated,
+adds new lines and drops the ones the menus no longer have. A `note` says where
+a line is shown. A translation has to keep the line's `%d`/`%02d` parts in
+their order (and `%%` for a percent sign in such a line) and its `{name}`
+parts; one that does not is not used, and the console says so. The file goes in
+`translations/port/` beside the program; its language is then offered in the
+first-run language screen and F1 even without menu labels of its own.
+
 Adding an ID to a JSON file alone cannot translate an arbitrary hardcoded
 string: the code or data that displays it must use the corresponding
 translation system.

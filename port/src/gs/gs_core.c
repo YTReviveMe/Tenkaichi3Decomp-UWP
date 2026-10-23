@@ -708,6 +708,8 @@ static void transfer_begin(void) {
     }
 }
 
+static uint64_t now_ns(void); /* (below) */
+
 static void transfer_data(const uint8_t *p, uint32_t bytes) {
     uint32_t dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
     uint32_t bits, total, i;
@@ -914,8 +916,11 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc) {
             qwc--;
         } else { /* IMAGE */
             uint32_t n = loops < qwc ? loops : qwc;
+            extern uint64_t gDrawXferNs; /* (BT3_DRAW_LOG: the time writing pictures into GS memory) */
+            uint64_t t0 = now_ns();
             sStat[6] += n;
             transfer_data((const uint8_t *)q, n * 16);
+            gDrawXferNs += now_ns() - t0;
             q += 2 * n;
             qwc -= n;
             loops -= n;
@@ -996,8 +1001,13 @@ static void vif(const uint32_t *w, uint32_t count) {
         case 0x03: GsVu1_SetBase(imm); break;
         case 0x04: GsVu1_SetItop(imm); break;
         case 0x05: GsVu1_SetMode(imm); break;
-        case 0x14: case 0x15: GsVu1_Call((int)imm); break;
-        case 0x17: GsVu1_Call(-1); break;
+        case 0x14: case 0x15: case 0x17: { /* (BT3_DRAW_LOG: the time in vertex programs, their draws in it) */
+            extern uint64_t gDrawVuNs;
+            uint64_t t0 = now_ns();
+            GsVu1_Call(cmd == 0x17 ? -1 : (int)imm);
+            gDrawVuNs += now_ns() - t0;
+            break;
+        }
         case 0x20: need = 1; break;
         case 0x30: case 0x31: need = 4; break;
         case 0x4A: need = (num ? num : 256) * 2; break;
@@ -1608,7 +1618,9 @@ static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc
 
 static void run_frozen(void) {
     size_t at = 0;
+    extern void GsGpu_ListStart(void); /* gs_draw.c: BT3_DRAW_LOG times a picture from here */
 
+    GsGpu_ListStart();
     while (at < sFrozenUsed) {
         const uint32_t *b = sFrozen + at;
         chain_block(b + 2, b + 6, b[0], (int)b[1]);
@@ -1649,6 +1661,9 @@ static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag
 
 /* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
 static void run_chain(uint32_t tadr, int tte) {
+    extern void GsGpu_ListStart(void);
+
+    GsGpu_ListStart();
     walk_chain(tadr, tte, chain_block);
     chain_end();
 }
