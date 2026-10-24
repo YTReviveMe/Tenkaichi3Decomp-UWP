@@ -40,8 +40,6 @@ extern "C" int PortUwp_InitStorage(void) {
             }
         }
         const bool applied = configured && PortUwp_ApplyStorageEnvironment() != 0;
-        PortUwp_Trace((std::string("LocalFolder: ") + app_local).c_str());
-        PortUwp_Trace((std::string("Internal BT3: ") + local).c_str());
         if (applied) PortUwp_Trace((std::string("Content root: ") + PortUwp_ContentPath()).c_str());
         PortUwp_Trace(configured ? (applied ? "Storage ready" : "Could not set storage paths") : PortUwp_StorageError());
         return applied;

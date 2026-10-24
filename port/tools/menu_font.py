@@ -490,7 +490,7 @@ def compare_styles(data_root, labels_dir, fonts_dir, font_arg=None, output=None)
     draw.text((column+24, 98), 'Rendered replacement text', font=annotation, fill='white')
     top = header
     for (style, label, pair), row_height in zip(rendered_rows, heights):
-        draw.text((24, top+4), f'{style}  —  {label}', font=annotation, fill='white')
+        draw.text((24, top+4), f'{style}  -  {label}', font=annotation, fill='white')
         for index, panel in enumerate(pair):
             comparison.paste(panel, (24+column*index, top+44))
         top += row_height

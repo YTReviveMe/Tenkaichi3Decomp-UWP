@@ -31,7 +31,6 @@ typedef unsigned char GLboolean; typedef char GLchar; typedef float GLfloat; typ
 typedef unsigned int GLbitfield; typedef void GLvoid; typedef intptr_t GLsizeiptr; typedef intptr_t GLintptr;
 typedef unsigned char GLubyte;
 
-/* X(name, ret, args, callargs) — every entry point is declared with its real signature and loaded by name. */
 #define GL_FUNCS(X) \
     X(glGetError, GLenum, (void), ()) \
     X(glEnable, void, (GLenum), (GLenum)) \
@@ -175,7 +174,7 @@ static char *read_file(const char *path) {
 
 /* GL 3.3 core allows layout(location=N) on vertex INPUTS and fragment OUTPUTS only. Vertex OUTPUTS and
  * fragment INPUTS need GLSL 4.20 / ARB_separate_shader_objects, so strip the qualifier there and let the
- * linker match the varyings by name — every program names them identically on both sides.
+ * linker match the varyings by name. Every program names them identically on both sides.
  */
 static char *translate(const char *src, int is_vertex) {
     size_t cap = strlen(src) + 128, len = 0;
@@ -359,7 +358,7 @@ static const char *dclut_samplers[] = { "depthTex", "auxTex", "clutTex" };
  *   mat4 boneA@0, boneB@64, [pivotA@128, pivotB@144 | scale@128, texScale@144],
  *   mat4 screen@160, vec4 light@224, color0@240, color1@256, misc@272 [, light2@288].
  * With boneA=boneB=screen=identity, zero pivots and misc.z=1, every program maps its position through the
- * same identity screen matrix gs.vert uses, so the same triangle lands in the same place — which is what
+ * same identity screen matrix gs.vert uses, so the same triangle lands in the same place, which is what
  * makes the probe compare the four vertex programs against each other rather than just checking they parse.
  */
 static void bind_u(GLuint prog, int vu6) {

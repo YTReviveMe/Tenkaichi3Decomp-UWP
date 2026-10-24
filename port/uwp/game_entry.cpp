@@ -9,6 +9,17 @@ extern "C" int PortUwp_ReserveFixedMemory(void);
 extern "C" const char *PortUwp_FixedMemoryError(void);
 extern "C" void PortUwp_Trace(const char *message);
 
+static int startup_error(const char *message) {
+    PortUwp_Trace(message);
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        SDL_Window *window = SDL_CreateWindow("Tenkaichi 3 startup error", 1280, 720, 0);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tenkaichi 3 startup error", message, window);
+        if (window) SDL_DestroyWindow(window);
+        SDL_Quit();
+    }
+    return 2;
+}
+
 int main(int argc, char **argv) {
     OutputDebugStringA("BT3 startup: entered app main\n");
     SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *message) {
@@ -20,25 +31,10 @@ int main(int argc, char **argv) {
         _snprintf_s(error, sizeof(error), _TRUNCATE,
                     "The game executable loaded outside its required low-address range (0x%llx).",
                     (unsigned long long)image_base);
-        PortUwp_Trace(error);
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-            SDL_Window *window = SDL_CreateWindow("Tenkaichi 3 startup error", 1280, 720, 0);
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tenkaichi 3 startup error", error, window);
-            if (window) SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-        return 2;
+        return startup_error(error);
     }
     if (!PortUwp_ReserveFixedMemory()) {
-        const char *error = PortUwp_FixedMemoryError();
-        PortUwp_Trace(error);
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-            SDL_Window *window = SDL_CreateWindow("Tenkaichi 3 startup error", 1280, 720, 0);
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tenkaichi 3 startup error", error, window);
-            if (window) SDL_DestroyWindow(window);
-            SDL_Quit();
-        }
-        return 2;
+        return startup_error(PortUwp_FixedMemoryError());
     }
     PortUwp_Trace("BT3 startup: fixed memory reserved");
     char image_message[96];

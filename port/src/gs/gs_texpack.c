@@ -156,7 +156,6 @@ static void add(const char *dir, const char *name) {
 }
 
 #ifdef BT3_UWP
-/* UWP directory access uses the FromApp dirent shim. */
 typedef struct ScanStats {
     unsigned entries, folders, rejected, openError;
 } ScanStats;

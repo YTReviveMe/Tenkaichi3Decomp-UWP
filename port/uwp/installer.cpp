@@ -77,10 +77,6 @@ std::string with_slash(std::string path) {
 }
 }
 
-std::vector<std::string> PortUwp_ExternalRoots() {
-    return std::async(std::launch::async, external_roots).get();
-}
-
 bool PortUwp_RunInstaller(const std::string &internal_root, std::string &installed_root,
                           const std::string &existing_root) {
     PortUwp_Trace("Starting BT3 ISO installer");
