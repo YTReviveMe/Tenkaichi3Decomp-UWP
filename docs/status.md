@@ -651,7 +651,7 @@ first; stale note in btl_char_cam.c), add this round's lessons to docs/decomp_gu
 are only in the agents' reports in the transcript: X2, W2, X1). Then ask the user: continue
 matching rounds, or tag the decomp and start the separate port repo (my recommendation once
 the behaviour sweep is clean; permuter keeps running in the background).
-USER RULES: at most 10 agents; local commits only, no Claude co-author line; gate before
+USER RULES: at most 10 agents; local commits only; gate before
 EVERY commit outside docs/; document findings; the user prefers loose folders over AFS for
 the port; decomp phase ends at "all game code linked, SDK excluded" (reached).
 
@@ -697,7 +697,7 @@ repo (my recommendation: move on; the permuter can keep running). Port preferenc
 in memory: loose folders instead of AFS, separate repo forked from a tagged decomp commit,
 interpolated rendering over an untouched 30 Hz simulation (discussed, not formally decided),
 SDL3 GPU suggested for the renderer (not decided).
-RULES: at most 10 agents; local commits, no Claude co-author line; run the gate before EVERY
+RULES: at most 10 agents; local commits; run the gate before EVERY
 commit that touches anything outside docs/ (two slips today: 8f74a33 and 90e054b do not
 build, each fixed by the next commit); document findings.
 

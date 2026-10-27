@@ -1,6 +1,11 @@
-# Tenkaichi3Decomp
+# Tenkaichi3Decomp UWP
 
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/RsPFr4pkaN)
+Xbox Dev Mode port of [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp), based on upstream v0.1.38.9.
+The Xbox build is 0.0.44.0. See [Xbox setup and build instructions](port/uwp/README.md).
+
+## Upstream PC port
+
+[Upstream Discord](https://discord.gg/RsPFr4pkaN)
 
 A native PC port of **Dragon Ball Z: Budokai Tenkaichi 3** (PlayStation 2, USA release, SLUS-21678), built on
 the matching decompilation in **BT3-Decompiled**. It is the game's own code compiled for PC, with a new
@@ -9,12 +14,9 @@ renderer, sound and input layer underneath; it is not an emulator.
 This repository contains **no game data**. You need your own disc image of that release: the setup reads the
 game's data from it, and it stays on your computer.
 
-> **Official source.** This project lives only at
-> [github.com/z3xox/Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp), and it never ships the game:
-> you need your own disc. We do not make, run or endorse any website that lets you play Budokai Tenkaichi 3 in a
-> browser, with or without ads; such sites are not affiliated with this project. A site that runs the game
-> without your own disc is handing out the game's copyrighted code and data. Our releases are free and have no
-> ads, accounts or payments.
+The original PC project is maintained at
+[github.com/z3xox/Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
+This Xbox fork is separate and requires your own disc image.
 
 ## What works
 

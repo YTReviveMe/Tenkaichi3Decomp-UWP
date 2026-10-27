@@ -5,8 +5,8 @@ docs/decomp_guide.md, docs/netplay_notes.md, the "Effect scene" section of
 docs/systems/battle.md, and docs/systems/combat.md (sections "Hits from blasts and
 techniques", "Fighter effect layer", "Character parameters").
 
-Disassembly snapshot to read from (NOT the live asm/ folder, which another process regenerates):
-/tmp/claude-1000/-home-z3-Desktop-decomp-bt3/ed9e766e-dea6-4684-86f5-14b7166075c4/scratchpad/snap2/asm/cod/*.s
+Historical disassembly snapshot (not included in this repository):
+scratchpad/snap2/asm/cod/*.s
 (find a function with `grep -ln "^glabel NAME$"`; data in .../snap2/asm/data/cod/*.s).
 The snapshot predates the newest names: a function shown there as `func_XXXXXXXX` may already
 have a name in config/symbols/*.txt. Look addresses up there (`grep -rn "0x001D4F30" config/`)

@@ -8,8 +8,8 @@ battle.md, boot_and_frame.md, files_and_assets.md, memory.md).
 Goal of the project right now: decompile EVERYTHING to matching C, byte for byte. Your range is
 code nobody has looked at yet. Nothing is known about it except what its callers say.
 
-Disassembly snapshot to read from (NOT the live asm/ folder, which integration regenerates):
-/tmp/claude-1000/-home-z3-Desktop-decomp-bt3/ed9e766e-dea6-4684-86f5-14b7166075c4/scratchpad/snap3/asm/cod/*.s
+Historical disassembly snapshot (not included in this repository):
+scratchpad/snap3/asm/cod/*.s
 (find a function with `grep -ln "^glabel NAME$"`; data in .../snap3/asm/data/cod/*.s). Names of
 everything already decompiled are in config/symbols/*.txt: look an address up there
 (`grep -rn "0x0024D610" config/`) and use the current name. Linked sources in src/ call into

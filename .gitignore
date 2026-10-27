@@ -1,5 +1,16 @@
 *.iso
+*.chd
 *.rvz
+*.msix
+*.appx
+*.pfx
+*.p12
+*.pem
+*.key
+*.dmp
+*.log
+.env
+.env.*
 /disc/
 /wii/
 /tools/

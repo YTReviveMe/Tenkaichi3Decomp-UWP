@@ -16,8 +16,8 @@ and call the main executable for everything shared: `Dialog_*`, `McFlow_*`, `Get
 `MsgWin_*`, `IconWin_*`, `ChrView_*`, `TextBox_*`, `ChrGrid_*`, `StgGrid_*`, `Num_*`,
 `FlashAnim_*`, the Flash-like movie player, `Font_*`, `Snd_*`, pads, files.
 
-Disassembly snapshot to read from (NOT the live asm/ folder):
-/tmp/claude-1000/-home-z3-Desktop-decomp-bt3/ed9e766e-dea6-4684-86f5-14b7166075c4/scratchpad/snap3/asm/dbzp/000000.s
+Historical disassembly snapshot (not included in this repository):
+scratchpad/snap3/asm/dbzp/000000.s
 (one file; data in .../snap3/asm/dbzp/data/07C280.data.s). Main-executable names: look
 addresses up in config/symbols/*.txt (`grep -rn "0x0025CFC0" config/`); the snapshot predates
 most of them, so a `func_XXXXXXXX` there usually has a real name now, and the linked source in
