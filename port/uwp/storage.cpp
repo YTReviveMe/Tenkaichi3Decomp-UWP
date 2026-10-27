@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <cstdlib>
 #include <cstring>
 #if defined(_WIN32) && defined(BT3_UWP)
 #include <windows.h>
@@ -199,37 +198,9 @@ extern "C" int PortUwp_ApplyStorageEnvironment(void) {
            set("BT3_SETTINGS", settings_path) &&
            set("BT3_TEXTURES", texture_path.string()) &&
            set("BT3_STAGES", (std::filesystem::path(content_path) / "stages").string()) &&
-           set("BT3_SONGS", (std::filesystem::path(content_path) / "songs").string());
+           set("BT3_SONGS", (std::filesystem::path(content_path) / "songs").string()) &&
+           set("BT3_MATCH_URL", "");
     if (!paths) return 0;
     PortUwp_Trace(("Texture folder: " + texture_path.string()).c_str());
-#if defined(_WIN32) && defined(BT3_UWP)
-    char *existing = nullptr;
-    size_t existing_size = 0;
-    _dupenv_s(&existing, &existing_size, "BT3_MATCH_URL");
-    const bool custom_server = existing && *existing;
-    std::free(existing);
-    if (!custom_server) {
-        const auto file = (std::filesystem::path(internal_path) / "matchmaking-url.txt").wstring();
-        HANDLE handle = CreateFileFromAppW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle != INVALID_HANDLE_VALUE) {
-            char buffer[256] = {};
-            DWORD count = 0;
-            const bool read = ReadFile(handle, buffer, sizeof(buffer) - 1, &count, nullptr) != 0;
-            CloseHandle(handle);
-            if (read) {
-                std::string url(buffer, count);
-                const auto end = url.find_first_of("\r\n \t");
-                if (end != std::string::npos) url.resize(end);
-                if ((url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0) &&
-                    set("BT3_MATCH_URL", url)) {
-                    PortUwp_Trace("Using matchmaking-url.txt for online rooms");
-                } else {
-                    PortUwp_Trace("Ignoring invalid matchmaking-url.txt");
-                }
-            }
-        }
-    }
-#endif
     return 1;
 }

@@ -107,7 +107,8 @@ or bring up to date a file for translators:
 A new line's `text` is its English, as a placeholder (a line left so is shown in
 English); running the tool again on the same file keeps what is translated,
 adds new lines and drops the ones the menus no longer have. A `note` says where
-a line is shown. A translation has to keep the line's `%d`/`%02d` parts in
+a line is shown. A line with a player's name in it (the lobby's "%s joined
+the lobby", "Spectating %s vs %s") has `%s` for each name. A translation has to keep the line's `%d`/`%02d`/`%s` parts in
 their order (and `%%` for a percent sign in such a line) and its `{name}`
 parts; one that does not is not used, and the console says so. The file goes in
 `translations/port/` beside the program; its language is then offered in the

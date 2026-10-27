@@ -2,7 +2,7 @@
 
 `bt3_uwp_game` builds the decompiled game for x64 UWP. The package includes SDL3, DXIL shaders, menu assets, fonts, and the executable's data and state maps. Game files are supplied by the player.
 
-The upstream 0.1.38.4 package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Upstream-0.1.38.4-0.0.41.0.zip`. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
+The upstream 0.1.38.9 package is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Upstream-0.1.38.9-0.0.42.0.zip`. Each ZIP contains the MSIX, signing certificate, and x64 VCLibs dependency.
 
 ## Game data
 
@@ -26,9 +26,9 @@ Internal data lives at `D:\DevelopmentFiles\BT3`. External data lives at the rem
 
 Put `.dds` or `.png` replacement textures in `D:\DevelopmentFiles\BT3\textures`. When this folder exists, the app uses it even if the game data is on an external drive. Otherwise it uses `<Drive>:\BT3\textures` with external content. Subfolders are supported. To switch back to external textures, rename or remove the internal `textures` folder. `boot.log` records the selected texture folder.
 
-Upstream 0.1.38.4 reads replacement files in the background and keeps recently read files in memory. An HD texture may appear a frame or two after its original. It also reduces the first-frame cost of new effects and textures. When a texture pack is present, `boot.log` records `Texture perf`, `Texture GPU`, and `Texture files` lines every 60 game frames. For a comparison, play the same fight at the same resolution with the pack on and off, then send the new `boot.log`. `port.log` has the same lines if it is easier to retrieve from the development folder.
+Upstream 0.1.38.9 reads replacement files in the background, limits how much pack data enters a frame, and reuses the texture upload buffer. An HD texture may appear a frame or two after its original. When a texture pack is present, `boot.log` records `Texture perf`, `Texture GPU`, and `Texture files` lines every 60 game frames. `port.log` has the same lines in the development folder.
 
-Dragon Net Battle and Tenkaichi Budokai Online use the online lobby. Direct addresses, room codes, and quick match use the desktop port's network protocol. Upstream lists online compatibility across 0.1.38 releases. Quick match depends on the configured matchmaking service and may reject unofficial builds. For a custom service, put its base URL in `D:\DevelopmentFiles\BT3\matchmaking-url.txt`. `BT3_MATCH_URL` takes priority when set in the app environment. Xbox to Xbox play was confirmed by a tester with a two-frame setting on an earlier build.
+Dragon Net Battle and Tenkaichi Budokai Online use the desktop port's network protocol. Room and lobby codes use upstream's public code service. The Xbox build ignores an existing `D:\DevelopmentFiles\BT3\matchmaking-url.txt` from older builds. Hosts and joiners can also use a direct address and port. Lobbies and spectators need PC build 0.1.38.8 or newer. Quick Match on the public service can reject unofficial builds. Xbox to Xbox play was confirmed by a tester on an earlier build.
 
 ## Build
 

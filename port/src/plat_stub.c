@@ -322,8 +322,10 @@ int Port_LateInput(void) {
 
 void Port_LateInputSet(int on) {
     extern void Port_SettingSave(const char *name, int value);
+    extern void Port_SettingsWrite(void);
     sLateOn = on != 0;
     Port_SettingSave("late_input", sLateOn);
+    Port_SettingsWrite(); /* (in the file at once: it was lost at the end unless another setting was written after it) */
 }
 
 /* The blanks owed are waited for now: called before the first pad is read. */
@@ -365,7 +367,8 @@ void Port_VBlank(void) {
         extern int gPortResim;                                /* gs/state.c: no picture, no sound */
         int warp = Port_NetWarp();
         extern int Port_NetResim(void); /* blanks being run again after a rollback: not shown, not timed either */
-        int again = Port_NetResim();
+        extern int Port_NetSpecSkip(void); /* (a spectator catching up with the match: the same) */
+        int again = Port_NetResim() || Port_NetSpecSkip();
         if (Port_NetSession() || again) {
             gPortResim = warp || again; /* an online session's start-up up to the versus menu is not shown and not timed */
         }
