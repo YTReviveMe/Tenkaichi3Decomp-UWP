@@ -372,6 +372,7 @@ static void upload_pending(SDL_GPUCopyPass *copy) {
             SDL_zero(ti);
             ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
             uploadBufferSize = size > 8u * 1024u * 1024u ? (size + 0xFFFFFu) & ~0xFFFFFu : 8u * 1024u * 1024u;
+            ti.size = uploadBufferSize;
             uploadBuffer = SDL_CreateGPUTransferBuffer(sDev, &ti);
         }
         mapped = uploadBuffer != NULL ? SDL_MapGPUTransferBuffer(sDev, uploadBuffer, true) : NULL;
