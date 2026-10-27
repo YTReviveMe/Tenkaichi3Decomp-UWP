@@ -112,8 +112,6 @@ static int map(uint32_t addr, uint32_t size, const char *what) {
 }
 
 #ifdef BT3_UWP
-/* Claim the PS2 register addresses before WinRT storage, SDL, and the ISO
-   installer allocate memory. Their heaps can otherwise occupy 0x10000000. */
 int PortUwp_ReserveFixedMemory(void) {
     return map(0x10000000u, 0x10000, "the hardware registers") &&
            map(0x12000000u, 0x2000, "the GS registers") &&

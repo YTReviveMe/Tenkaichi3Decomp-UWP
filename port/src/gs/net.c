@@ -2876,16 +2876,7 @@ int Port_NetView(void) {
 
 #ifndef BT3_UWP
 static const char *session_saves(void);
-
-static void session_saves_empty(void) {
-    static const char *const kFiles[] = {"BASLUS-21678DBZT3", "icon.sys", "dbzsm.ico"};
-    char path[600];
-    int i;
-    for (i = 0; i < 3; i++) {
-        snprintf(path, sizeof(path), "%s/card1/BASLUS-21678DBZT3/%s", session_saves(), kFiles[i]);
-        remove(path);
-    }
-}
+static void clear_session_save(const char *root);
 
 static void relaunch(int role, const char *join, int port) {
     char value[160];
@@ -2941,8 +2932,7 @@ static void relaunch(int role, const char *join, int port) {
             SETENV("BT3_NET_OPTS", value);
         }
         SETENV("BT3_SAVES", session_saves());
-        /* the session's own save folder starts empty: both sides begin from the game's defaults */
-        session_saves_empty();
+        clear_session_save(session_saves());
     } else {
         SETENV("BT3_SAVES", NULL); /* (a save folder named on the command line is not carried over a session: known) */
         SETENV("BT3_NOMOVIE", "1");
@@ -3079,7 +3069,6 @@ void Port_NetSessionBegin(int role, const char *address, int port) {
         sSavesWasSet = saves != NULL;
         snprintf(sSavesBefore, sizeof(sSavesBefore), "%s", saves != NULL ? saves : "");
     }
-    /* the session's own save folder starts empty: both sides begin from the game's defaults */
     clear_session_save(session_saves());
     sVoiceAlt = own_voice_alt(); /* (before the save folder changes: it is read from the player's own) */
 #ifdef BT3_UWP

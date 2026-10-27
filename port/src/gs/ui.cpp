@@ -815,8 +815,6 @@ static void quick_status(int state, int &lastState, const char *name) {
 }
 
 #ifdef BT3_UWP
-// ImGui owns the field's text; SDL owns the Xbox keyboard. Selecting a field
-// explicitly starts text input so the UWP InputPane appears even with a gamepad.
 static void net_text_field(void) {
     if (ImGui::IsItemActive()) {
         sNetTextActive = true;

@@ -52,8 +52,6 @@ extern "C" int PortUwp_HttpRequest(const char *url, const char *body,
         std::memcpy(answer, contents.data(), length);
         answer[length] = '\0';
         return 1;
-    } catch (const winrt::hresult_error &) {
-        return 0;
     } catch (...) {
         return 0;
     }
