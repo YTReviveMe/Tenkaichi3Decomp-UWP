@@ -84,7 +84,8 @@ def main():
     GEN.mkdir(parents=True, exist_ok=True)
     (GEN / "bars_png.h").write_text("".join(bars))
     sources = sorted((ROOT / "port/src").glob("*.c")) + \
-              sorted(f for f in (ROOT / "port/src/gs").glob("*.c") if f.name != "gs_gl.c") + \
+              sorted(f for f in (ROOT / "port/src/gs").glob("*.c") if f.name not in {
+                  "gs_gl.c", "net_update.c", "update_crypto.c", "update_monocypher.c", "update_sign.c"}) + \
               [ROOT / "src/port/vu0_a.c", ROOT / "src/port/vu0_b.c"]
     generated_stubs = ROOT / "port/build/uwp/gen/stubs.c"
     if generated_stubs.exists():
