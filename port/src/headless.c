@@ -284,17 +284,17 @@ int Port_SpecLineShown(void) {
     return shown;
 }
 
-/* (asked here and not in the game's file: there a pointer is 4 bytes wide in the 64-bit build, and getenv's is not)
-   Dragon Net Battle is listed only when the player asks for it: F1 > Online > Advanced, "List Dragon Net Battle in the
-   main menu" (setting net_dnb_menu, off by default; Tenkaichi Budokai Online's screens do everything it does).
-   BT3_MENU_ITEM4=0 / 1 (testing) hides or lists it whatever the setting says. */
 int Port_NetMenuListed(void) {
     extern int Port_Setting(const char *name, int def);
     const char *e = getenv("BT3_MENU_ITEM4");
     if (e != NULL) {
         return atoi(e) != 0;
     }
+#ifdef BT3_UWP
+    return Port_Setting("net_dnb_menu", 1) != 0;
+#else
     return Port_Setting("net_dnb_menu", 0) != 0;
+#endif
 }
 
 /* "Unlock everything" on the Cheats tab of the settings window (port/src/gs/ui.cpp): the game's own leftover debug

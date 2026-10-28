@@ -2,7 +2,7 @@
 
 `bt3_uwp_game` builds the decompiled game for x64 UWP. The package includes SDL3, DXIL shaders, menu assets, fonts, and the executable's data and state maps. Game files are supplied by the player.
 
-The local online test build is `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-Online-Test-0.1.39.0.zip`. The ZIP contains the MSIX and x64 VCLibs dependency. Build output is not committed to the repository.
+Local builds produce `build/uwp-playable/AppPackages/bt3_uwp_game/BT3-Xbox-DevMode-0.1.39.1.zip`. The ZIP contains the MSIX and x64 VCLibs dependency. Build output is not committed to the repository.
 
 ## Game data
 
@@ -28,7 +28,7 @@ Put `.dds` or `.png` replacement textures in `D:\DevelopmentFiles\BT3\textures`.
 
 Upstream 0.1.38.9 reads replacement files in the background, limits how much pack data enters a frame, and reuses the texture upload buffer. An HD texture may appear a frame or two after its original. When a texture pack is present, `boot.log` records `Texture perf`, `Texture GPU`, and `Texture files` lines every 60 game frames. `port.log` has the same lines in the development folder.
 
-Tenkaichi Budokai Online uses the desktop port's network protocol. Lobby codes use upstream's public code service. The Xbox build ignores an existing `D:\DevelopmentFiles\BT3\matchmaking-url.txt` from older builds. Hosts and joiners can also use a direct address and port. PC players need build 0.1.39 for online compatibility with this test build. Quick Match on the public service can reject unofficial builds. Xbox to Xbox play was confirmed by a tester on an earlier build.
+Tenkaichi Budokai Online uses the desktop port's network protocol. Dragon Net Battle is listed in the main menu by default and can be hidden under **Online > Advanced**. Lobby codes use upstream's public code service. The Xbox build ignores an existing `D:\DevelopmentFiles\BT3\matchmaking-url.txt` from older builds. Hosts and joiners can also use a direct address and port. PC players need build 0.1.39 for online compatibility. Quick Match on the public service can reject unofficial builds. Xbox to Xbox play was confirmed by a tester on an earlier build.
 
 ## Build
 

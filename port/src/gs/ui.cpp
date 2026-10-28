@@ -748,7 +748,7 @@ static void build_quit(void) {
 
 // Dragon Net Battle: the first online window of the port, behind the main menu's item 4. Tenkaichi Budokai Online's
 // screens (src/menu/port_tbo.c) do everything it does; it is opened from F1 > Online > Advanced, and listed in the
-// main menu only when the player asks for it there (setting net_dnb_menu). Since 0.1.39 a match with a friend is a
+// main menu when enabled (setting net_dnb_menu). Since 0.1.39 a match with a friend is a
 // lobby's (gs/net_lobby.c), as on the screens: the Host tab opens a lobby (with a code, or on a port) with its rules,
 // the Join tab joins one (its code, or its owner's address); the lobby itself is the screens' page, which the main
 // menu opens as soon as this game is in one. There is no room of two and no "Watch" any more: a spectator is a
@@ -1978,7 +1978,11 @@ static void online_tab(void) {
             set_open(false);
         }
         ImGui::EndDisabled();
+#ifdef BT3_UWP
+        bool listed = Port_Setting("net_dnb_menu", 1) != 0;
+#else
         bool listed = Port_Setting("net_dnb_menu", 0) != 0;
+#endif
         if (ImGui::Checkbox("List Dragon Net Battle in the main menu", &listed)) {
             Port_SettingSave("net_dnb_menu", listed ? 1 : 0);
             Port_SettingsWrite();

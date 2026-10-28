@@ -1,7 +1,7 @@
 # Tenkaichi3Decomp UWP
 
 Xbox Dev Mode port of [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp), based on upstream v0.1.39.
-The local Xbox test build is 0.1.39.0. See [Xbox setup and build instructions](port/uwp/README.md).
+The Xbox build is 0.1.39.1. See [Xbox setup and build instructions](port/uwp/README.md).
 
 ## Upstream PC port
 
